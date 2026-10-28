@@ -39,7 +39,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.27"
+VERSION = "2.28"
 
 HOST = os.environ.get("VITA_TWITCH_HOST", "127.0.0.1")
 PORT = int(os.environ.get("VITA_TWITCH_PORT", "8443"))
@@ -1722,6 +1722,44 @@ def activate_page(req, params):
     return 200, None, page
 
 
+# --------------------------------------------------------------------------
+# Zaehler: wie viele Vitas sind gerade da? (nur Anzahlen, keine IPs nach aussen)
+# --------------------------------------------------------------------------
+ONLINE_WINDOW = int(os.environ.get("VITA_ONLINE_WINDOW", "600"))   # Sekunden: "online"
+WATCH_WINDOW = 90                                                  # Sekunden: "schaut gerade"
+_presence = {}          # IP -> {"seen": t, "watch": t}
+_presence_lock = threading.Lock()
+_peak = {"n": 0, "at": 0.0}
+
+
+def track_presence(ip, ua, path):
+    is_vita = "Sony-PSV" in ua            # native Twitch-App (der Vita-Browser zaehlt nicht)
+    watching = path.startswith("/hls/")
+    if not (is_vita or watching):
+        return
+    now = time.time()
+    with _presence_lock:
+        p = _presence.setdefault(ip, {"seen": 0.0, "watch": 0.0})
+        p["seen"] = now
+        if watching:
+            p["watch"] = now
+
+
+def presence_stats():
+    now = time.time()
+    with _presence_lock:
+        for ip in [ip for ip, p in _presence.items() if p["seen"] < now - ONLINE_WINDOW]:
+            _presence.pop(ip, None)
+        online = set(_presence)
+        watching = sum(1 for p in _presence.values() if p["watch"] > now - WATCH_WINDOW)
+    with _sess_lock:
+        logged = {v.get("ip") for v in _sessions.values() if v.get("seen", 0) > now - ONLINE_WINDOW}
+    if len(online) > _peak["n"]:
+        _peak.update(n=len(online), at=now)
+    return {"online": len(online), "angemeldet": len(online & logged), "schauen": watching,
+            "rekord": _peak["n"], "fenster_min": ONLINE_WINDOW // 60}
+
+
 def static_page(name, extra=None):
     """Seite aus www/, Platzhalter {HOST} {VERSION} {REPO} {REPO_SHORT} (+ extra) ersetzt."""
     try:
@@ -2076,7 +2114,7 @@ class Handler(BaseHTTPRequestHandler):
                 status, size = self._proxy(pm.group(1), pm.group(2), pm.group(3), head)
             elif path in ("/", "/test", "/health"):
                 status, size = self._send(200, {"ok": True, "service": "vita-twitch-adapter",
-                                                "version": VERSION}, head)
+                                                "version": VERSION, "vitas": presence_stats()}, head)
             else:
                 for rx, fn in ROUTES:
                     m = rx.match(path)
@@ -2101,6 +2139,8 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 status = 500
         ms = int((time.time() - t0) * 1000)
+        if status < 400 or (path.startswith("/hls/") and status != 403):   # 403 = gefaelschter Link
+            track_presence(self._client_ip(), self.headers.get("User-Agent", ""), path)
         ua = self.headers.get("User-Agent", "-")
         level = logging.WARNING if (not matched or status >= 400) else logging.INFO
         safe_path = re.sub(r"((?:^|[?&])(?:token|oauth_token|sig)=)[^&]*", r"\1***", self.path)

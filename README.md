@@ -12,6 +12,7 @@ Die App bleibt unverändert, es wird kein Patch eingespielt. Die Vita leitet die
 - Gefolgte Kanäle, Profile mit Follower-Zahl, Aufrufen und Banner
 - **Werbefrei mit Turbo, Abo oder Prime, pro Konto:** Jeder Nutzer kann auf der Startseite (Abschnitt „Werbefrei“) sein eigenes Website-`auth-token` hinterlegen, per Lesezeichen-Button auf twitch.tv oder von Hand. Der Adapter prüft bei Twitch, wem das Token gehört, und benutzt es nur für dieses Konto. Turbo erkennt er automatisch. Gespeichert wird es mit AES-GCM verschlüsselt (`/var/lib/vita-twitch/webtokens.json`) und stündlich auf Gültigkeit geprüft; abgemeldete Tokens werden automatisch gelöscht. Ohne Token wird anonym abgespielt, mit der üblichen Werbung. Das Konto auf der Vita erkennt der Adapter an der Sitzung, am signierten Wiedergabe-Token oder an der IP der letzten Anmeldung.
 - Eine Startseite für alles unter `/`: Code-Eingabe, Werbefrei-Verknüpfung per Lesezeichen, Einrichtung mit `redirects.txt` (auch als Download), Live-Status und FAQ. `/activate` und `/link` leiten nur noch dorthin weiter.
+- Live-Zähler auf der Startseite: verbundene Vitas, davon angemeldet, schauen gerade (über `/health`, nur Anzahlen; mehrere Vitas hinter derselben IP zählen als eine, Fenster per `VITA_ONLINE_WINDOW` in Sekunden)
 - Analytics-Endpunkte (spade, mixpanel) werden sofort beantwortet, damit die App nicht blockiert
 
 ## Aufbau
