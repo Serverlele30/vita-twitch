@@ -39,7 +39,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.22"
+VERSION = "2.23"
 
 HOST = os.environ.get("VITA_TWITCH_HOST", "127.0.0.1")
 PORT = int(os.environ.get("VITA_TWITCH_PORT", "8443"))
@@ -87,7 +87,8 @@ WEB_AUTH_TOKEN = os.environ.get("TWITCH_WEB_AUTH_TOKEN", "").strip()
 TURBO = os.environ.get("VITA_TURBO", "0") == "1"
 # Profilkarte: Hintergrundfarbe + Ersatz-Banner (Twitch liefert beides nicht mehr)
 PROFILE_BG = os.environ.get("VITA_PROFILE_BG", "#1f1f23")
-PUBLIC_BASE = os.environ.get("VITA_PUBLIC_BASE", "https://ytv.serverlele.de")
+PUBLIC_BASE = os.environ.get("VITA_PUBLIC_BASE", "https://ytv.serverlele.de").rstrip("/")
+PUBLIC_HOST = urllib.parse.urlsplit(PUBLIC_BASE).netloc
 # Der Bildlader der App holt Bilder nur von Twitchs Bilderserver -> Ersatzbilder von dort
 DEFAULT_BANNER = "https://static-cdn.jtvnw.net/ttv-static/404_preview-498x280.jpg"
 # Banner abdunkeln, damit die helle Schrift (Follower/Aufrufe/Bio) lesbar bleibt: 1.0 = Original
@@ -1183,10 +1184,9 @@ def ep_hls(base, params, req, login):
 # Die App bekommt einen eigenen Sitzungsschluessel; Twitch-Tokens bleiben auf dem Server.
 # --------------------------------------------------------------------------
 _pending = {}           # PSN-Token -> {"device_code", "user_code", "uri", "expires", "session"}
-_qr_uris = {}           # user_code -> (Aktivierungs-URL, Ablaufzeit), nur fuer laufende Logins
 _short = {}             # 6-stelliger Vita-Code -> (Aktivierungs-URL, Ablaufzeit)
 SHORT_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"   # ohne 0/O und 1/I
-ACTIVATE_URL = os.environ.get("VITA_ACTIVATE_URL", "ytv.serverlele.de/activate")
+ACTIVATE_URL = os.environ.get("VITA_ACTIVATE_URL", PUBLIC_HOST + "/activate")
 
 
 def new_short_code():
@@ -1289,9 +1289,6 @@ def ep_auth_generate(base, params, req):
         for k in [k for k, v in _short.items() if v[1] < time.time()]:
             _short.pop(k, None)
         _short[short] = (uri, exp)
-        _qr_uris = {k: v for k, v in globals()["_qr_uris"].items() if v[1] > time.time()}
-        _qr_uris[res["user_code"].upper()] = (uri, exp)
-        globals()["_qr_uris"] = _qr_uris
     log.info("Login gestartet: Vita-Code %s -> https://%s", short, ACTIVATE_URL)
     return 200, {"code": short}
 
@@ -1517,43 +1514,6 @@ def ep_banner(base, params, req):
     return 200, _banner_png[0]
 
 
-def png_from_matrix(matrix, size=256):
-    """RGB-PNG in fester Groesse (Standard 256x256), schwarz auf weiss, zentriert.
-    RGB statt Graustufen, weil der Bildlader der Vita-App nicht jedes PNG-Format kann."""
-    n = len(matrix)
-    scale = max(1, size // n)
-    pad = (size - n * scale) // 2
-    white, black = b"\xff\xff\xff", b"\x00\x00\x00"
-    blank = b"\x00" + white * size
-    rows = [blank] * pad
-    for r in matrix:
-        line = white * pad + b"".join((black if cell else white) * scale for cell in r)
-        line += white * (size - pad - n * scale)
-        rows.extend([b"\x00" + line] * scale)
-    rows.extend([blank] * (size - len(rows)))
-
-    def chunk(tag, data):
-        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xffffffff)
-    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
-            + chunk(b"IDAT", zlib.compress(b"".join(rows), 9)) + chunk(b"IEND", b""))
-
-
-def ep_qr(base, params, req, code):
-    hit = _qr_uris.get(code.upper())
-    if not hit or hit[1] < time.time():
-        raise ApiError(404, "unknown or expired code")
-    try:
-        import qrcode
-    except ImportError:
-        log.error("Python-Modul 'qrcode' fehlt (apt install python3-qrcode)")
-        raise ApiError(503, "QR generator not installed")
-    qr = qrcode.QRCode(border=2, error_correction=qrcode.constants.ERROR_CORRECT_M)
-    qr.add_data(hit[0])
-    qr.make(fit=True)
-    log.info("QR-Code fuer Login %s ausgeliefert", code.upper())
-    return 200, png_from_matrix(qr.get_matrix(), 256)
-
-
 def is_subscribed(sess, broadcaster_login):
     """Echter Abo-Status (auch Prime) ueber Helix, 5 Minuten gecacht."""
     if "user:read:subscriptions" not in (sess.get("scopes") or []):
@@ -1673,7 +1633,6 @@ ROUTES = [
     (re.compile(r"^/kraken/users/([A-Za-z0-9_]+)/follows/channels$"), ep_followed_channels),
     (re.compile(r"^/kraken/users/([A-Za-z0-9_]+)/follows/channels/([A-Za-z0-9_]+)$"), ep_follow_status),
     (re.compile(r"^(?:/api)?/users/([A-Za-z0-9_]+)/follows/games(?:/live)?$"), ep_empty_follows),
-    (re.compile(r"^/qr/([A-Za-z0-9]{4,16})\.png$"), ep_qr),
     (re.compile(r"^/img/banner\.png$"), ep_banner),
     (re.compile(r"^/img/r/([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+)\.jpg$"), ep_image),
     (re.compile(r"^/api/channels/([A-Za-z0-9_]+)/viewer$"), ep_viewer),
@@ -1696,10 +1655,10 @@ class Handler(BaseHTTPRequestHandler):
                 or self.client_address[0])
 
     def _host(self):
-        h = (self.headers.get("X-Forwarded-Host") or self.headers.get("Host") or "ytv.serverlele.de")
+        h = (self.headers.get("X-Forwarded-Host") or self.headers.get("Host") or PUBLIC_HOST)
         h = h.split(",")[0].strip()
-        # Proxy-Links immer ueber ytv.serverlele.de (dort gelten unsere TLS-/HTTP-Regeln)
-        return "ytv.serverlele.de" if "twitch" in h or "ttvnw" in h or "justin" in h else h
+        # Proxy-Links immer ueber den eigenen Host (dort gelten unsere TLS-/HTTP-Regeln)
+        return PUBLIC_HOST if "twitch" in h or "ttvnw" in h or "justin" in h else h
 
     def _proxy(self, sig, blob, ext, head):
         url = proxy_target(sig, blob)

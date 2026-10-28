@@ -5,14 +5,14 @@
 set -euo pipefail
 
 REPO=${VITA_REPO:-/root/git/vita-twitch}
-PKG=${VITA_PKG:-/root/vita-twitch-paket/vita-twitch}   # entpacktes Installationspaket
 HERE=$(cd "$(dirname "$0")" && pwd)
+PKG=${VITA_PKG:-$HERE}   # Fallback-Quelle, wenn eine Datei live fehlt
 MSG=${1:-}
 
 die() { echo "FEHLER: $*" >&2; exit 1; }
 cp_first() {  # cp_first ZIEL QUELLE1 [QUELLE2 ...]  -> erste vorhandene Quelle kopieren
   local dst=$1; shift
-  for src in "$@"; do [ -f "$src" ] && { install -D -m 644 "$src" "$REPO/$dst"; return 0; }; done
+  for src in "$@"; do [ -f "$src" ] && { [ "$src" -ef "$REPO/$dst" ] && return 0; install -D -m 644 "$src" "$REPO/$dst"; return 0; }; done
   echo "  [--] nicht gefunden: $dst"
 }
 
@@ -26,20 +26,23 @@ cp_first nginx/vita-twitch.conf        /root/npm/data/nginx/custom/http.conf "$P
 cp_first cron/vita-twitch-cert         /etc/cron.d/vita-twitch-cert "$PKG/cron/vita-twitch-cert"
 cp_first bin/vita-timeline             /usr/local/sbin/vita-timeline "$PKG/bin/vita-timeline"
 cp_first bin/vita-twitch-check         /usr/local/sbin/vita-twitch-check "$PKG/bin/vita-twitch-check"
-cp_first install.sh                    "$PKG/install.sh"
-cp_first vita/redirects.txt            "$PKG/vita/redirects.txt"
-cp_first vita-twitch.env.example       "$PKG/vita-twitch.env.example"
 cp_first dns/dnsmasq-vita.conf         /etc/dnsmasq.d/vita.conf /root/vita-dnsmasq.conf.bak
 # Drop-ins (falls install.sh noch nicht gelaufen ist)
 if [ -d /etc/systemd/system/vita-twitch.service.d ]; then
   for f in /etc/systemd/system/vita-twitch.service.d/*.conf; do cp_first "systemd/vita-twitch.service.d/$(basename "$f")" "$f"; done
 fi
-chmod 755 bin/* install.sh 2>/dev/null || true
-# Repo-Dateien (README, .gitignore, dieses Skript) nur anlegen, wenn sie fehlen
-for f in README.md .gitignore vita-git-export.sh; do
-  [ -f "$REPO/$f" ] || { [ -f "$HERE/$f" ] && install -m 644 "$HERE/$f" "$REPO/$f"; }
+
+echo "== Repo-eigene Dateien"
+# Diese Dateien gibt es nicht "live" auf dem Server, sie gehoeren dem Repo.
+# Wird das Skript aus einem Update-Ordner gestartet, ersetzt es sie durch die Fassung von dort.
+for f in README.md .gitignore vita-git-export.sh install.sh vita/redirects.txt vita-twitch.env.example; do
+  if [ "$HERE" != "$REPO" ] && [ -f "$HERE/$f" ]; then
+    install -D -m 644 "$HERE/$f" "$REPO/$f"
+  elif [ ! -f "$REPO/$f" ]; then
+    cp_first "$f" "$PKG/$f"
+  fi
 done
-[ -f vita-git-export.sh ] && chmod 755 vita-git-export.sh
+chmod 755 bin/* install.sh vita-git-export.sh 2>/dev/null || true
 
 echo "== Secret-Pruefung"
 # 1) echte Werte aus der env-Datei duerfen nirgends im Repo stehen

@@ -8,6 +8,8 @@ NPM=npm-npm-1
 NPM_DATA=/root/npm/data
 NGINX_CUSTOM=$NPM_DATA/nginx/custom/http.conf
 TS=$(date +%Y%m%d-%H%M%S)
+HOST=$(grep -oP '^VITA_PUBLIC_BASE=https?://\K[^/]+' /etc/vita-twitch.env 2>/dev/null || true)
+HOST=${HOST:-ytv.serverlele.de}
 BK=/root/vita-twitch-backup-$TS
 
 ok()   { echo "  [ok] $*"; }
@@ -16,7 +18,6 @@ warn() { echo "  [!!] $*"; }
 echo "== Voraussetzungen"
 python3 -c "import yt_dlp" 2>/dev/null && ok "yt-dlp" || { warn "yt-dlp fehlt: pip3 install --break-system-packages yt-dlp"; exit 1; }
 python3 -c "import PIL" 2>/dev/null   && ok "Pillow" || { apt-get install -y -q python3-pil >/dev/null && ok "Pillow installiert"; }
-python3 -c "import qrcode" 2>/dev/null && ok "qrcode" || { apt-get install -y -q python3-qrcode >/dev/null && ok "qrcode installiert"; }
 docker inspect $NPM >/dev/null 2>&1 && ok "NPM-Container $NPM" || { warn "NPM-Container $NPM nicht gefunden"; exit 1; }
 python3 -m py_compile adapter.py && ok "adapter.py Syntax"
 
@@ -49,10 +50,10 @@ fi
 
 echo "== nginx (NPM)"
 if [ ! -f /root/npm/letsencrypt/live/ytv-rsa/fullchain.pem ]; then
-  warn "RSA-Zertifikat ytv-rsa fehlt. Einmalig (NPM-Host ytv.serverlele.de muss dafuer kurz aktiv sein):"
+  warn "RSA-Zertifikat ytv-rsa fehlt. Einmalig (NPM-Host $HOST muss dafuer kurz aktiv sein):"
   echo "     docker exec $NPM certbot certonly --config /etc/letsencrypt.ini --cert-name ytv-rsa --key-type rsa \\"
-  echo "       --rsa-key-size 2048 --webroot -w /data/letsencrypt-acme-challenge -d ytv.serverlele.de --agree-tos --non-interactive"
-  echo "     danach NPM-Host ytv.serverlele.de deaktivieren und install.sh erneut ausfuehren."
+  echo "       --rsa-key-size 2048 --webroot -w /data/letsencrypt-acme-challenge -d $HOST --agree-tos --non-interactive"
+  echo "     danach NPM-Host $HOST deaktivieren und install.sh erneut ausfuehren."
 else
   install -d "$(dirname "$NGINX_CUSTOM")"
   install -m 644 nginx/vita-twitch.conf "$NGINX_CUSTOM"
@@ -72,7 +73,7 @@ systemctl enable vita-twitch >/dev/null 2>&1
 systemctl restart vita-twitch
 for i in $(seq 1 15); do curl -sk -m 2 https://127.0.0.1:8443/health >/dev/null 2>&1 && break; sleep 1; done
 curl -sk https://127.0.0.1:8443/health && echo
-curl -s -m 5 -o /dev/null -w "  oeffentlich: %{http_code}\n" https://ytv.serverlele.de/health || true
+curl -s -m 5 -o /dev/null -w "  oeffentlich: %{http_code}\n" https://$HOST/health || true
 echo
 echo "Fertig. Backup: $BK"
-echo "Test:  vita-twitch-check https://ytv.serverlele.de --verify   |   Diagnose: vita-timeline 10"
+echo "Test:  vita-twitch-check https://$HOST --verify   |   Diagnose: vita-timeline 10"
