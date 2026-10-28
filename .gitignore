@@ -1,0 +1,19 @@
+# Zugangsdaten und Laufzeitdaten – gehoeren nie ins Repo
+*.env
+!vita-twitch.env.example
+sessions.json
+hls.key
+*.key
+*.pem
+*.crt
+# Vita-Lizenz / entschluesselte App (urheberrechtlich geschuetzt)
+*.rif
+zrif*
+eboot.bin*
+app0/
+# Logs, Mitschnitte, Backups
+*.log
+*.jsonl
+*.pcap
+*.bak
+__pycache__/

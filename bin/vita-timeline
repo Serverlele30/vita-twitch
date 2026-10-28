@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""vita-timeline [MINUTEN]  -  Zeitleiste aller Vita-Ereignisse der letzten N Minuten (Standard 10).
+
+Fuehrt DNS (dnsmasq), Webserver (nginx, mit Antwortzeit) und Adapter zusammen und markiert Pausen.
+So sieht man, ob eine Wartezeit auf der Vita/PSN-Seite oder auf dem Server entsteht.
+"""
+import datetime as dt
+import re
+import subprocess
+import sys
+
+NGINX_LOG = "/root/npm/data/logs/vita-twitch_timing.log"
+PAUSE = 3.0  # Sekunden ohne Ereignis, ab denen eine Pause markiert wird
+
+RX_ADAPTER_IP = re.compile(r"(?:INFO|WARNING|ERROR) (\d+\.\d+\.\d+\.\d+) \S+ .*UA='(?:Sony-PSV|Mozilla/5\.0 \(PlayStation Vita)")
+RX_DNS = re.compile(r"query\[(?:A|AAAA)\] (\S+) from (\d+\.\d+\.\d+\.\d+)")
+
+
+def journal(unit, minutes):
+    out = subprocess.run(["journalctl", "-u", unit, "--since", "-%d min" % minutes, "--no-pager",
+                          "-o", "short-iso-precise"], capture_output=True, text=True).stdout
+    for line in out.splitlines():
+        parts = line.split(" ", 2)
+        if len(parts) < 3 or not parts[0][:4].isdigit():
+            continue
+        try:
+            ts = dt.datetime.fromisoformat(parts[0]).astimezone()
+        except ValueError:
+            continue
+        yield ts, parts[2].split(": ", 1)[-1]
+
+
+def main():
+    minutes = int(sys.argv[1]) if len(sys.argv) > 1 else 10
+    since = dt.datetime.now().astimezone() - dt.timedelta(minutes=minutes)
+
+    adapter = list(journal("vita-twitch", minutes))
+    ips = [m.group(1) for _, msg in adapter for m in [RX_ADAPTER_IP.search(msg)] if m]
+    vita = ips[-1] if ips else None
+    print("Vita-IP:", vita or "unbekannt (keine Vita-Anfrage beim Adapter) - zeige DNS aller Absender ausser VPS")
+
+    ev = []
+    for ts, msg in adapter:
+        if "aufgewaermt" in msg:
+            continue
+        ev.append((ts, "ADAPTER", msg[:170]))
+    for ts, msg in journal("dnsmasq", minutes):
+        m = RX_DNS.search(msg)
+        if m and (m.group(2) == vita or (vita is None and m.group(2) != "45.129.183.3")):
+            ev.append((ts, "DNS", m.group(1)))
+    try:
+        with open(NGINX_LOG, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                m = re.match(r"\[([^\]]+)\] (.*)", line)
+                if not m:
+                    continue
+                try:
+                    ts = dt.datetime.fromisoformat(m.group(1)).astimezone()
+                except ValueError:
+                    continue
+                if ts >= since and (vita is None or ("Client " + vita) in line):
+                    ev.append((ts, "NGINX", m.group(2)[:170]))
+    except FileNotFoundError:
+        print("(kein nginx-Zeitlog unter %s)" % NGINX_LOG)
+
+    ev.sort(key=lambda e: e[0])
+    last = None
+    for ts, src, msg in ev:
+        if last and (ts - last).total_seconds() >= PAUSE:
+            print("            ----- Pause %.1f s -----" % (ts - last).total_seconds())
+        print("%s  %-7s %s" % (ts.strftime("%H:%M:%S.%f")[:12], src, msg))
+        last = ts
+    if not ev:
+        print("Keine Ereignisse im Zeitraum.")
+
+
+if __name__ == "__main__":
+    main()
