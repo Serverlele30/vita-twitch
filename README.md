@@ -10,7 +10,7 @@ Die App bleibt unverändert, es wird kein Patch eingespielt. Die Vita leitet die
 - VODs: Übertragungen und Highlights
 - Login per 6-stelligem Code: Die Vita zeigt den Code, freigegeben wird er im Browser unter `https://<host>/activate` (im Hintergrund der Twitch Device Code Flow); die Sitzung wird automatisch erneuert
 - Gefolgte Kanäle, Profile mit Follower-Zahl, Aufrufen und Banner
-- **Werbefrei mit Turbo/Abo**, wenn das `auth-token` des Web-Kontos hinterlegt ist
+- **Werbefrei mit Turbo/Abo** für das Konto, dessen Web-`auth-token` hinterlegt ist. Alle anderen Konten spielen anonym ab, Twitch blendet dann die üblichen Werbespots ein. Das Konto auf der Vita erkennt der Adapter an der Sitzung, am signierten Wiedergabe-Token oder an der IP der letzten Anmeldung.
 - Infoseite für Browser unter `/` mit Anleitung, Live-Status und `redirects.txt` zum Download (`/redirects.txt`)
 - Analytics-Endpunkte (spade, mixpanel) werden sofort beantwortet, damit die App nicht blockiert
 
@@ -61,11 +61,12 @@ vita-twitch-check https://<host> --verify
 ```
 
 ## Grenzen
+- Werbefrei für **andere** Konten mit Turbo/Abo geht nicht automatisch: Werbefreie Streams gibt Twitch nur an Tokens der offiziellen Twitch-Website und -Apps aus, nicht an Drittanbieter-Logins wie diesen.
 - Kein QR-Code-Login: Der Bildlader der App kann ihn nicht darstellen, deshalb gibt es den 6-stelligen Code.
 - Kein Chat: Die Vita-App hatte nie einen.
 - Folgen und Entfolgen sind nicht möglich, weil Twitch das per API abgeschafft hat.
 - Kanal-Aufrufe = Summe der Video-Aufrufe, da Helix keine Kanal-Aufrufe mehr liefert.
-- Werbefreiheit nur mit hinterlegtem Web-`auth-token`; dieser ist so viel wert wie ein Passwort und gehört nur in die env-Datei. Achtung: Jede Vita, die auf deinen Server zeigt, bekommt die Wiedergabe über dieses Konto.
+- Werbefreiheit nur mit hinterlegtem Web-`auth-token`; dieser ist so viel wert wie ein Passwort und gehört nur in die env-Datei. Es wird nur für das eigene Konto benutzt, außer du setzt `VITA_WEB_TOKEN_SHARE=1`.
 
 ## Hinweis
 Ein inoffizielles Hobbyprojekt ohne Verbindung zu Twitch oder Sony. Das Repo enthält keinen App-Code, keine Lizenzdateien und keine Zugangsdaten.

@@ -39,7 +39,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.24"
+VERSION = "2.25"
 
 HOST = os.environ.get("VITA_TWITCH_HOST", "127.0.0.1")
 PORT = int(os.environ.get("VITA_TWITCH_PORT", "8443"))
@@ -85,6 +85,11 @@ CLIENT_SECRET = os.environ.get("TWITCH_CLIENT_SECRET", "").strip()
 WEB_AUTH_TOKEN = os.environ.get("TWITCH_WEB_AUTH_TOKEN", "").strip()
 # Hast du Twitch Turbo? Helix kann das nicht abfragen -> selbst angeben (VITA_TURBO=1).
 TURBO = os.environ.get("VITA_TURBO", "0") == "1"
+# Das Web-Token gilt nur fuer seinen Besitzer: Andere Konten spielen anonym ab und bekommen die
+# Werbung, die Twitch ihnen zuteilt. VITA_WEB_TOKEN_SHARE=1 stellt das alte Verhalten (alle) wieder her.
+WEB_OWNER = os.environ.get("VITA_WEB_TOKEN_OWNER", "").strip().lower() or None   # sonst beim Start ermittelt
+WEB_SHARE = os.environ.get("VITA_WEB_TOKEN_SHARE", "0") == "1"
+IP_MATCH_HOURS = float(os.environ.get("VITA_IP_MATCH_HOURS", "12"))
 # Profilkarte: Hintergrundfarbe + Ersatz-Banner (Twitch liefert beides nicht mehr)
 PROFILE_BG = os.environ.get("VITA_PROFILE_BG", "#1f1f23")
 PUBLIC_BASE = os.environ.get("VITA_PUBLIC_BASE", "https://ytv.serverlele.de").rstrip("/")
@@ -873,15 +878,23 @@ def ep_video(base, params, req, vid):
 
 def ep_vod_token(base, params, req, vid):
     exp = int(time.time()) + 1200
-    token = json.dumps({"vod_id": int(vid), "expires": exp, "adapter": "vita-twitch"}, separators=(",", ":"))
-    return 200, {"token": token, "sig": "vita-twitch-adapter", "mobile_restricted": False}
+    who, _src = viewer_login(req, params)
+    tok = {"vod_id": int(vid), "expires": exp, "adapter": "vita-twitch"}
+    if who:
+        tok["user"] = who
+    token = json.dumps(tok, separators=(",", ":"))
+    return 200, {"token": token, "sig": sign_token(token), "mobile_restricted": False}
 
 
 def ep_vod_hls(base, params, req, vid):
-    key = ("vodhls", vid)
+    who, src = viewer_login(req, params)
+    web = web_token_for(who)
+    key = ("vodhls", vid, web)
     playlist = cache.get(key)
     if playlist is None:
-        info = ytdlp_extract("https://www.twitch.tv/videos/" + vid, "Video not available: ")
+        log.info("VOD %s fuer %s (%s): %s", vid, who or "nicht angemeldet", src or "-",
+                 "mit Konto-Vorteilen" if web else "anonym")
+        info = ytdlp_extract("https://www.twitch.tv/videos/" + vid, "Video not available: ", web=web)
         playlist = build_master(info, "http://" + req._host())
         cache.set(key, playlist, 300)
     return 200, playlist
@@ -993,14 +1006,56 @@ def ep_search_games(base, params, req):
 
 
 # ---------------------------- Wiedergabe ----------------------------------
+def sign_token(token):
+    return hmac.new(HLS_KEY, token.encode(), hashlib.sha256).hexdigest()[:40]
+
+
+def viewer_login(req, params):
+    """Welches Twitch-Konto schaut? -> (login, Quelle) oder (None, None).
+    1) Sitzung an der Anfrage  2) signiertes Wiedergabe-Token  3) letzte Sitzung von derselben IP."""
+    try:
+        sess = session_from(req, params)
+    except ApiError:
+        sess = None
+    if sess:
+        return sess.get("login"), "Sitzung"
+    tok, sig = first(params, "token"), first(params, "sig")
+    if tok and sig and hmac.compare_digest(sign_token(tok), sig):
+        try:
+            t = json.loads(tok)
+            if t.get("user") and t.get("expires", 0) > time.time():
+                return t["user"], "Token"
+        except ValueError:
+            pass
+    ip, best = req._client_ip(), None
+    with _sess_lock:
+        for v in _sessions.values():
+            if v.get("ip") == ip and v.get("seen", 0) > time.time() - IP_MATCH_HOURS * 3600:
+                if not best or v["seen"] > best["seen"]:
+                    best = v
+    if best:
+        return best.get("login"), "IP"
+    return None, None
+
+
+def web_token_for(login):
+    """Darf dieses Konto mit dem hinterlegten Web-Token (Turbo/Abo des Besitzers) abspielen?"""
+    if not WEB_AUTH_TOKEN:
+        return False
+    return WEB_SHARE or bool(login and WEB_OWNER and login.lower() == WEB_OWNER)
+
+
 def ep_access_token(base, params, req, login):
     user = user_by_login(login)
     if not user:
         raise ApiError(404, "Channel '%s' does not exist" % login)
     exp = int(time.time()) + 1200
-    token = json.dumps({"channel": user["login"], "expires": exp, "adapter": "vita-twitch"},
-                       separators=(",", ":"))
-    return 200, {"token": token, "sig": "vita-twitch-adapter", "mobile_restricted": False,
+    who, _src = viewer_login(req, params)
+    tok = {"channel": user["login"], "expires": exp, "adapter": "vita-twitch"}
+    if who:
+        tok["user"] = who
+    token = json.dumps(tok, separators=(",", ":"))
+    return 200, {"token": token, "sig": sign_token(token), "mobile_restricted": False,
                  "expires_at": datetime.fromtimestamp(exp, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
 
 
@@ -1014,23 +1069,23 @@ def write_cookie_file(directory, token):
     return path
 
 
-def run_ytdlp(login):
-    return ytdlp_extract("https://www.twitch.tv/" + login, "Stream not available: ", login)
+def run_ytdlp(login, web=True):
+    return ytdlp_extract("https://www.twitch.tv/" + login, "Stream not available: ", login, web)
 
 
-def ytdlp_extract(url, errprefix, login_for_fallback=None):
+def ytdlp_extract(url, errprefix, login_for_fallback=None, web=True):
     """yt-dlp direkt im Prozess (spart ~2 s Start pro Stream); Fallback: Unterprozess."""
     try:
         import yt_dlp
     except ImportError:
         if login_for_fallback:
-            return run_ytdlp_subprocess(login_for_fallback)
+            return run_ytdlp_subprocess(login_for_fallback, web)
         raise ApiError(503, "yt-dlp not installed")
     import tempfile
     tmpdir = tempfile.mkdtemp(prefix="vita-yt-")
     opts = {"quiet": True, "no_warnings": True, "noplaylist": True, "cachedir": False,
             "skip_download": True, "socket_timeout": 15, "logger": _YtLog()}
-    if WEB_AUTH_TOKEN:
+    if WEB_AUTH_TOKEN and web:
         opts["cookiefile"] = write_cookie_file(tmpdir, WEB_AUTH_TOKEN)
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -1056,7 +1111,7 @@ class _YtLog:
         log.info("yt-dlp: %s", str(msg)[:200])
 
 
-def run_ytdlp_subprocess(login):
+def run_ytdlp_subprocess(login, web=True):
     """Liefert die yt-dlp-Formatliste eines Live-Kanals (enthaelt die Variant-Playlists)."""
     cmd = [sys.executable, "-m", "yt_dlp", "-J", "--no-warnings", "--no-cache-dir",
            "--no-playlist", "https://www.twitch.tv/" + login]
@@ -1065,7 +1120,7 @@ def run_ytdlp_subprocess(login):
         env.pop(k, None)  # Secrets nicht ueber die Umgebung an den Kindprozess
     tmpdir = None
     try:
-        if WEB_AUTH_TOKEN:
+        if WEB_AUTH_TOKEN and web:
             import tempfile
             tmpdir = tempfile.mkdtemp(prefix="vita-yt-")
             cmd[3:3] = ["--cookies", write_cookie_file(tmpdir, WEB_AUTH_TOKEN)]
@@ -1145,8 +1200,7 @@ def rewrite_playlist(text, src_url, base_http):
     if "stitched-ad" in text or "Amazon|" in text:
         if time.time() - _last_ad_log[0] > 60:
             _last_ad_log[0] = time.time()
-            log.warning("Werbung im Stream erkannt (%s)", "Konto ohne Turbo/Abo fuer diesen Kanal"
-                        if WEB_AUTH_TOKEN else "kein TWITCH_WEB_AUTH_TOKEN gesetzt")
+            log.info("Werbung im Stream (anonyme Wiedergabe oder Konto ohne Turbo/Abo)")
     out = []
     for line in text.splitlines():
         t = line.strip()
@@ -1175,10 +1229,14 @@ def ep_hls(base, params, req, login):
     login = login.lower()
     if not re.fullmatch(r"[a-z0-9_]{1,25}", login):
         raise ApiError(404, "Channel not found")
-    key = ("hls", login)
+    who, src = viewer_login(req, params)
+    web = web_token_for(who)
+    key = ("hls", login, web)
     playlist = cache.get(key)
     if playlist is None:
-        info = run_ytdlp(login)
+        log.info("Stream %s fuer %s (%s): %s", login, who or "nicht angemeldet", src or "-",
+                 "mit Konto-Vorteilen (Turbo/Abo)" if web else "anonym - Werbung nach Twitch-Regeln")
+        info = run_ytdlp(login, web)
         playlist = build_master(info, "http://" + req._host())
         cache.set(key, playlist, 20)
     return 200, playlist
@@ -1339,7 +1397,9 @@ def session_from(req, params):
     sid = sid or first(params, "oauth_token")
     if not sid:
         return None
-    return fresh_session(sid)
+    sess = fresh_session(sid)
+    sess["ip"], sess["seen"] = req._client_ip(), time.time()   # nur im Speicher, fuer viewer_login()
+    return sess
 
 
 def any_session():
@@ -1576,7 +1636,8 @@ def ep_viewer(base, params, req, login):
     except ApiError:
         sess = None
     subbed = is_subscribed(sess, login) if sess else False
-    return 200, {"chansub": subbed, "turbo": TURBO, "has_ad_free_subscription": subbed,
+    turbo = TURBO and web_token_for((sess or {}).get("login"))
+    return 200, {"chansub": subbed, "turbo": turbo, "has_ad_free_subscription": subbed or turbo,
                  "is_admin": False, "is_staff": False, "login": (sess or {}).get("login", "")}
 
 
@@ -1586,7 +1647,8 @@ def ep_api_user(base, params, req):
         sess = session_from(req, params)
     except ApiError:
         sess = None
-    return 200, {"turbo_code": "turbo" if TURBO else None, "turbo": TURBO,
+    turbo = TURBO and web_token_for((sess or {}).get("login"))
+    return 200, {"turbo_code": "turbo" if turbo else None, "turbo": turbo,
                  "login": (sess or {}).get("login", ""), "name": (sess or {}).get("login", "")}
 
 
@@ -1902,6 +1964,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    global WEB_OWNER
     if not CLIENT_ID or not CLIENT_SECRET:
         log.error("TWITCH_CLIENT_ID/TWITCH_CLIENT_SECRET fehlen in der Umgebung")
         sys.exit(2)
@@ -1927,7 +1990,10 @@ def main():
     if WEB_AUTH_TOKEN:
         try:
             v = http_json("https://id.twitch.tv/oauth2/validate", headers={"Authorization": "OAuth " + WEB_AUTH_TOKEN})
-            log.info("Werbefrei-Konto: %s (Wiedergabe mit Turbo/Abo-Vorteilen)", v.get("login", "?"))
+            WEB_OWNER = WEB_OWNER or (v.get("login") or "").lower() or None
+            log.info("Web-Token gehoert %s - %s", WEB_OWNER or "?",
+                     "gilt fuer ALLE Konten (VITA_WEB_TOKEN_SHARE=1)" if WEB_SHARE
+                     else "nur dieses Konto spielt mit Turbo/Abo-Vorteilen, alle anderen anonym")
         except urllib.error.HTTPError as exc:
             log.error("TWITCH_WEB_AUTH_TOKEN ungueltig (HTTP %s) - Wiedergabe laeuft anonym mit Werbung", exc.code)
         except Exception as exc:
