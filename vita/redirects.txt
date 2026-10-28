@@ -1,0 +1,10 @@
+# tls_fixer host redirects. One source and destination hostname per line.
+# Exact host matches only; ports, URL paths and certificate validation stay enabled.
+# Restart the application after editing. PSN sign-in has a built-in default mapping.
+
+api.twitch.tv ytv.serverlele.de
+usher.twitch.tv ytv.serverlele.de
+usher.ttvnw.net ytv.serverlele.de
+usher.justin.tv ytv.serverlele.de
+spade.twitch.tv ytv.serverlele.de
+api.mixpanel.com ytv.serverlele.de

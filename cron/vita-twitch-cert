@@ -1,0 +1,2 @@
+# RSA-Zertifikat fuer ytv.serverlele.de (Vita) verlaengern - NPM erneuert es nicht selbst
+17 4 * * 1 root docker exec npm-npm-1 certbot renew --config /etc/letsencrypt.ini --cert-name ytv-rsa --quiet && docker exec npm-npm-1 nginx -s reload

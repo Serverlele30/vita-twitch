@@ -1,0 +1,232 @@
+#!/usr/bin/env python3
+"""Vertragspruefung des Vita-Twitch-Adapters gegen das Kraken-v3-Format.
+
+Aufruf:
+  python3 vita-twitch-check.py https://127.0.0.1:8443            (lokal, Zertifikat ungeprueft)
+  python3 vita-twitch-check.py https://ytv.serverlele.de --verify (oeffentlich, mit TLS-Pruefung)
+  Optional: --ua "<User-Agent der Vita aus dem NPM-Log>"  --channel <login>  --no-hls
+"""
+import argparse
+import json
+import ssl
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+ap = argparse.ArgumentParser()
+ap.add_argument("base")
+ap.add_argument("--verify", action="store_true")
+ap.add_argument("--ua", default="Mozilla/5.0 (PlayStation Vita 3.74) AppleWebKit/536.26 (KHTML, like Gecko) Silk/3.2")
+ap.add_argument("--channel", default="")
+ap.add_argument("--no-hls", action="store_true")
+a = ap.parse_args()
+BASE = a.base.rstrip("/")
+CTX = ssl.create_default_context() if a.verify else ssl._create_unverified_context()
+
+passed = failed = 0
+
+
+def ok(cond, msg):
+    global passed, failed
+    if cond:
+        passed += 1
+    else:
+        failed += 1
+        print("  FEHLER:", msg)
+    return cond
+
+
+def get(path, expect=200, raw=False):
+    req = urllib.request.Request(BASE + path, headers={
+        "User-Agent": a.ua, "Accept": "application/vnd.twitchtv.v3+json"})
+    try:
+        r = urllib.request.urlopen(req, timeout=40, context=CTX)
+        code, body, ctype = r.status, r.read(), r.headers.get("Content-Type", "")
+    except urllib.error.HTTPError as e:
+        code, body, ctype = e.code, e.read(), e.headers.get("Content-Type", "")
+    print("%-62s -> %s" % (path[:62], code))
+    ok(code == expect, "%s: Status %s statt %s" % (path, code, expect))
+    if raw:
+        return code, body.decode("utf-8", "replace"), ctype
+    ok(ctype.startswith("application/json") or ctype.startswith("application/vnd.twitchtv."), "%s: Content-Type %r" % (path, ctype))
+    try:
+        return json.loads(body)
+    except ValueError:
+        ok(False, "%s: kein gueltiges JSON" % path)
+        return {}
+
+
+def typ(obj, key, types, where, nullable=False):
+    if key not in obj:
+        return ok(False, "%s: Feld '%s' fehlt" % (where, key))
+    v = obj[key]
+    if v is None:
+        return ok(nullable, "%s.%s ist null" % (where, key))
+    return ok(isinstance(v, types) and not (isinstance(v, bool) and bool not in
+                                               (types if isinstance(types, tuple) else (types,))),
+              "%s.%s hat Typ %s" % (where, key, type(v).__name__))
+
+
+def check_imgset(o, where):
+    for k in ("small", "medium", "large", "template"):
+        typ(o, k, str, where)
+    ok("{width}" in o.get("template", "") or o.get("template", "") == "",
+       where + ".template ohne {width}")
+
+
+def check_channel(c, where="channel"):
+    for k in ("status", "display_name", "name", "url", "created_at", "updated_at",
+              "broadcaster_language", "language"):
+        typ(c, k, str, where)
+    typ(c, "_id", int, where)
+    typ(c, "game", str, where, nullable=True)
+    typ(c, "logo", str, where, nullable=True)
+    for k in ("mature", "partner"):
+        typ(c, k, bool, where)
+    for k in ("views", "followers"):
+        typ(c, k, int, where)
+    typ(c, "_links", dict, where)
+    ok(c.get("name", "") == c.get("name", "").lower() and c.get("name"), where + ".name ungueltig")
+
+
+def check_stream(s, where="stream"):
+    typ(s, "_id", int, where)
+    typ(s, "game", str, where, nullable=True)
+    for k in ("viewers", "video_height", "delay"):
+        typ(s, k, int, where)
+    typ(s, "average_fps", (int, float), where)
+    typ(s, "created_at", str, where)
+    typ(s, "is_playlist", bool, where)
+    typ(s, "_links", dict, where)
+    typ(s, "preview", dict, where) and check_imgset(s["preview"], where + ".preview")
+    typ(s, "channel", dict, where) and check_channel(s["channel"], where + ".channel")
+
+
+def check_game(g, where="game"):
+    typ(g, "name", str, where)
+    typ(g, "_id", int, where)
+    typ(g, "giantbomb_id", int, where)
+    typ(g, "box", dict, where) and check_imgset(g["box"], where + ".box")
+    typ(g, "logo", dict, where) and check_imgset(g["logo"], where + ".logo")
+
+
+def check_links(d, where):
+    typ(d, "_links", dict, where)
+    l = d.get("_links") or {}
+    ok("self" in l and "next" in l, where + "._links ohne self/next")
+    return l
+
+
+print("== Basis")
+h = get("/health")
+ok(h.get("ok") is True, "/health nicht ok")
+r = get("/kraken")
+typ(r, "_links", dict, "/kraken")
+typ(r, "token", dict, "/kraken")
+
+print("== Streams (wie von der Vita angefragt)")
+s1 = get("/kraken/streams?limit=20&offset=0")
+typ(s1, "_total", int, "streams")
+check_links(s1, "streams")
+ok(1 <= len(s1.get("streams", [])) <= 20, "streams: Anzahl %d" % len(s1.get("streams", [])))
+for i, s in enumerate(s1.get("streams", [])[:20]):
+    check_stream(s, "streams[%d]" % i)
+s_oct = get("/kraken/streams?broadcaster_software=octodad&limit=20&offset=0")
+ok(len(s_oct.get("streams", [])) > 0, "octodad-Liste leer")
+
+print("== Pagination")
+p0 = get("/kraken/streams?limit=5&offset=0")
+p1 = get("/kraken/streams?limit=5&offset=5")
+ids0 = [s["_id"] for s in p0.get("streams", [])]
+ids1 = [s["_id"] for s in p1.get("streams", [])]
+ok(len(ids0) == 5 and len(ids1) == 5, "Seiten nicht je 5 Eintraege")
+ok(not set(ids0) & set(ids1), "Seite 1 und 2 ueberschneiden sich")
+nxt = (p0.get("_links") or {}).get("next", "")
+ok("offset=5" in nxt and "limit=5" in nxt, "_links.next falsch: " + nxt)
+get("/kraken/streams?limit=abc&offset=-3")  # ungueltige Werte -> Defaults, kein Fehler
+
+print("== Filter")
+game = next((s["game"] for s in s1.get("streams", []) if s.get("game")), "Just Chatting")
+fg = get("/kraken/streams?" + urllib.parse.urlencode({"game": game, "limit": 10}))
+ok(all(s.get("game") == game for s in fg.get("streams", [])), "game-Filter greift nicht")
+chan = a.channel or (s1["streams"][0]["channel"]["name"] if s1.get("streams") else "")
+if chan:
+    fc = get("/kraken/streams?channel=" + chan)
+    ok(all(s["channel"]["name"] == chan for s in fc.get("streams", [])), "channel-Filter greift nicht")
+lang = get("/kraken/streams?language=de&limit=10")
+ok(all(s["channel"]["language"].startswith("de") for s in lang.get("streams", [])),
+   "language-Filter greift nicht")
+none = get("/kraken/streams?game=DiesesSpielGibtEsGarNicht123")
+ok(none.get("streams") == [] and none.get("_total") == 0, "unbekanntes Spiel liefert nicht leer")
+
+print("== Spiele")
+tg = get("/kraken/games/top?limit=20&offset=0")
+typ(tg, "_total", int, "games/top")
+check_links(tg, "games/top")
+ok(len(tg.get("top", [])) == 20, "games/top: nicht 20 Eintraege")
+for i, t in enumerate(tg.get("top", [])):
+    typ(t, "viewers", int, "top[%d]" % i)
+    typ(t, "channels", int, "top[%d]" % i)
+    typ(t, "game", dict, "top[%d]" % i) and check_game(t["game"], "top[%d].game" % i)
+tg2 = get("/kraken/games/top?limit=10&offset=10")
+ok([t["game"]["_id"] for t in tg2.get("top", [])] ==
+   [t["game"]["_id"] for t in tg.get("top", [])[10:20]], "games/top Pagination inkonsistent")
+ok(sum(1 for t in tg.get("top", []) if t["viewers"] > 0) >= 10, "zu wenige Spiele mit Zuschauerzahl")
+
+print("== Einzelabfragen")
+fe = get("/kraken/streams/featured?limit=5")
+ok(len(fe.get("featured", [])) > 0, "featured leer")
+for i, f in enumerate(fe.get("featured", [])):
+    typ(f, "image", str, "featured[%d]" % i)
+    typ(f, "stream", dict, "featured[%d]" % i) and check_stream(f["stream"], "featured[%d].stream" % i)
+sm = get("/kraken/streams/summary")
+typ(sm, "viewers", int, "summary")
+typ(sm, "channels", int, "summary")
+if chan:
+    one = get("/kraken/streams/" + chan)
+    ok("stream" in one, "streams/<ch>: Feld stream fehlt")
+    if one.get("stream"):
+        check_stream(one["stream"], "streams/<ch>")
+    ch = get("/kraken/channels/" + chan)
+    check_channel(ch, "channels/<ch>")
+    us = get("/kraken/users/" + chan)
+    typ(us, "name", str, "users/<u>")
+get("/kraken/streams/zz_gibtsnicht_zz9", expect=404)
+e = get("/kraken/channels/zz_gibtsnicht_zz9", expect=404)
+ok(e.get("status") == 404 and isinstance(e.get("message"), str) and e.get("error") == "Not Found",
+   "Kraken-Fehlerformat falsch")
+
+print("== Suche")
+ss = get("/kraken/search/streams?q=" + urllib.parse.quote(game[:6]) + "&limit=5")
+typ(ss, "streams", list, "search/streams")
+for i, s in enumerate(ss.get("streams", [])):
+    check_stream(s, "search/streams[%d]" % i)
+sc = get("/kraken/search/channels?q=" + urllib.parse.quote(chan or "twitch") + "&limit=5")
+for i, c in enumerate(sc.get("channels", [])):
+    check_channel(c, "search/channels[%d]" % i)
+sg = get("/kraken/search/games?q=" + urllib.parse.quote(game[:5]) + "&type=suggest&live=true")
+for i, g in enumerate(sg.get("games", [])):
+    check_game(g, "search/games[%d]" % i)
+get("/kraken/search/streams?q=", expect=400)
+
+print("== Unbekannte Endpunkte / Methoden")
+u = get("/kraken/gibtsnicht", expect=404)
+ok(u.get("status") == 404, "404-Format")
+
+if chan and not a.no_hls:
+    print("== Wiedergabe")
+    at = get("/api/channels/%s/access_token" % chan)
+    typ(at, "token", str, "access_token")
+    typ(at, "sig", str, "access_token")
+    code, body, ctype = get("/api/channel/hls/%s.m3u8?token=x&sig=y&allow_source=true" % chan, raw=True)
+    ok(body.startswith("#EXTM3U"), "m3u8 beginnt nicht mit #EXTM3U")
+    ok("mpegurl" in ctype, "m3u8 Content-Type " + ctype)
+    ok("#EXT-X-STREAM-INF" in body and "RESOLUTION=" in body, "m3u8 ohne Varianten")
+    ok('avc1' in body, "m3u8 ohne H.264-Variante")
+    print("   Varianten:", [l.split("RESOLUTION=")[1].split(",")[0]
+                           for l in body.splitlines() if "RESOLUTION=" in l])
+    get("/api/channel/hls/zz_gibtsnicht_zz9.m3u8", expect=404, raw=True)
+
+print("\nErgebnis: %d bestanden, %d fehlgeschlagen" % (passed, failed))
+sys.exit(1 if failed else 0)
