@@ -35,10 +35,11 @@ install -m 750 adapter.py /opt/vita-twitch/adapter.py
 install -d -m 755 /opt/vita-twitch/www
 install -m 644 www/index.html /opt/vita-twitch/www/
 rm -f /opt/vita-twitch/www/link.html   # seit 2.27 alles auf einer Seite
-install -m 750 bin/vita-timeline bin/vita-twitch-check /usr/local/sbin/
+install -m 750 bin/vita-timeline bin/vita-twitch-check bin/vita-cert-renew /usr/local/sbin/
 install -m 644 systemd/vita-twitch.service /etc/systemd/system/vita-twitch.service
 rm -rf /etc/systemd/system/vita-twitch.service.d   # Drop-ins sind jetzt in der Unit enthalten
-install -m 644 cron/vita-twitch-cert /etc/cron.d/vita-twitch-cert
+install -m 644 systemd/vita-cert-renew.service systemd/vita-cert-renew.timer /etc/systemd/system/
+rm -f /etc/cron.d/vita-twitch-cert   # ersetzt durch vita-cert-renew.timer
 if [ ! -f /etc/vita-twitch.env ]; then
   install -m 600 vita-twitch.env.example /etc/vita-twitch.env
   warn "/etc/vita-twitch.env neu angelegt - TWITCH_CLIENT_ID/SECRET eintragen und erneut starten"
@@ -74,6 +75,7 @@ fi
 echo "== Dienst"
 systemctl daemon-reload
 systemctl enable vita-twitch >/dev/null 2>&1
+systemctl enable --now vita-cert-renew.timer >/dev/null 2>&1 && ok "Zertifikat-Timer aktiv: $(systemctl show -p NextElapseUSecRealtime --value vita-cert-renew.timer 2>/dev/null)"
 systemctl restart vita-twitch
 for i in $(seq 1 15); do curl -sk -m 2 https://127.0.0.1:8443/health >/dev/null 2>&1 && break; sleep 1; done
 curl -sk https://127.0.0.1:8443/health && echo

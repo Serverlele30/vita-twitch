@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.29 – Sicherheit
+- Browser-Seiten nur über HTTPS: Port 80 leitet um, `POST /link` über HTTP wird abgelehnt
+- Strenge Content-Security-Policy (Skript per Hash), Schutz gegen Einbetten (`frame-ancestors 'none'`, `X-Frame-Options`), Permissions-Policy, COOP
+- Code-Freigabe nur noch per Formular (POST): ein geteilter Link `/?code=…` füllt nur das Feld vor und führt nicht mehr direkt zu Twitch, das erschwert Phishing
+- Login-Rechte verkleinert: kein `chat:read`/`chat:edit` mehr (die App hat keinen Chat)
+- Zertifikat: `vita-cert-renew` + systemd-Timer statt Cron, täglich, mit Ablauf-Prüfung, Warnung unter 14 Tagen und `--dry-run`
+- Limits gegen Missbrauch: Login-Start 20, Code-Eingabe 30, Token-Verknüpfung 10 je 10 Minuten und IP; Speicher dafür wird aufgeräumt
+
 ## 2.28
 - Live-Zähler auf der Startseite: verbundene Vitas, davon angemeldet, schauen gerade (über `/health`, nur Anzahlen)
 

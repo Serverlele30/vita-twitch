@@ -243,7 +243,7 @@ footer p{margin:0;max-width:600px}
         <p class="livenote" id="livenote">Live vom Server · aktive Twitch-Apps der letzten Minuten</p>
       </div>
 
-      <form class="act" id="aktivieren" method="get" action="/" autocomplete="off">
+      <form class="act" id="aktivieren" method="post" action="/activate" autocomplete="off">
         <h2>Vita anmelden</h2>
         <p>Wähle auf der Vita <b>Anmelden</b> und gib hier den 6-stelligen Code ein, der dort angezeigt wird.</p>
         <div class="msg err {ACT_ERR_CLASS}" id="acterr">{ACT_ERR}</div>

@@ -1,0 +1,10 @@
+[Unit]
+Description=PS-Vita-Twitch: Zertifikat taeglich pruefen und bei Bedarf verlaengern
+
+[Timer]
+OnCalendar=*-*-* 04:17
+RandomizedDelaySec=45min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

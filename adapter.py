@@ -39,7 +39,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.28"
+VERSION = "2.29"
 
 HOST = os.environ.get("VITA_TWITCH_HOST", "127.0.0.1")
 PORT = int(os.environ.get("VITA_TWITCH_PORT", "8443"))
@@ -55,7 +55,7 @@ HLS_HOSTS = tuple(h.strip() for h in os.environ.get(
 HLS_KEY = os.urandom(32)   # signiert Proxy-Links; neu pro Start
 STATE_DIR = os.environ.get("VITA_STATE_DIR", "/var/lib/vita-twitch")
 LOGIN_SCOPES = os.environ.get("VITA_LOGIN_SCOPES",
-                              "user:read:follows user:read:email user:read:subscriptions chat:read chat:edit")
+                              "user:read:follows user:read:email user:read:subscriptions")   # nur, was die App braucht (kein Chat)
 STRIP_NON_BMP = os.environ.get("VITA_STRIP_NON_BMP", "1") != "0"
 # Content-Type: "echo" = angefragte Kraken-Version zurueckmelden (z.B. vnd.twitchtv.v4+json),
 #               "json" = application/json
@@ -1047,7 +1047,23 @@ WEB_CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"      # oeffentliche Client-ID d
 TOKENS_FILE = os.path.join(STATE_DIR, "webtokens.json")
 _webtok = {}            # login -> {"user_id", "token", "turbo", "checked", "added"}
 _webtok_lock = threading.Lock()
-_link_hits = {}         # IP -> [Zeitstempel] (einfaches Limit fuer /link)
+_rate = {}              # (Bereich, IP) -> [Zeitstempel]
+_rate_lock = threading.Lock()
+
+
+def rate_ok(area, ip, limit, window):
+    """Einfaches Limit: hoechstens `limit` Aufrufe je `window` Sekunden und IP."""
+    now = time.time()
+    with _rate_lock:
+        if len(_rate) > 5000:   # aufraeumen, damit der Speicher nicht waechst
+            for k in [k for k, v in _rate.items() if not v or v[-1] < now - 3600]:
+                _rate.pop(k, None)
+        hits = [t for t in _rate.get((area, ip), []) if t > now - window]
+        if len(hits) >= limit:
+            _rate[(area, ip)] = hits
+            return False
+        _rate[(area, ip)] = hits + [now]
+        return True
 REVALIDATE = 3600       # Sekunden zwischen zwei Pruefungen eines Tokens
 
 
@@ -1189,11 +1205,9 @@ def has_turbo(login):
 
 def link_action(req, form):
     """POST /link: action=add|remove, auth_token=... -> (status, dict)."""
-    ip, now = req._client_ip(), time.time()
-    hits = [t for t in _link_hits.get(ip, []) if t > now - 600]
-    if len(hits) >= 10:
+    now = time.time()
+    if not rate_ok("link", req._client_ip(), 10, 600):
         return 429, {"ok": False, "error": "Zu viele Versuche. Bitte in ein paar Minuten noch einmal."}
-    _link_hits[ip] = hits + [now]
     token = (form.get("auth_token") or "").strip().strip('"').lower()
     if token.startswith("auth-token="):
         token = token.split("=", 1)[1]
@@ -1500,6 +1514,8 @@ def ep_auth_generate(base, params, req):
     psn = first(params, "token")
     if not psn:
         raise ApiError(400, "missing token")
+    if not rate_ok("generate", req._client_ip(), 20, 600):
+        raise ApiError(429, "too many login attempts, try again later")
     with _sess_lock:
         p = _pending.get(psn)
         if p and p.get("session"):
@@ -1701,25 +1717,42 @@ def ep_follow_status(base, params, req, login, target):
                  "channel": channel_obj(base, tu)}
 
 
-def activate_page(req, params):
-    """Startseite fuer Browser. ?code=XXXXXX -> Weiterleitung zur Twitch-Freigabe,
-    unbekannter Code -> Seite mit Fehlermeldung. /activate leitet nur noch hierher."""
-    code = re.sub(r"[^A-Za-z0-9]", "", first(params, "code")).upper()[:8]
+def activate_page(req, params, form=None):
+    """Startseite fuer Browser.
+    POST /activate (Formular) mit code -> Weiterleitung zur Twitch-Freigabe, sonst Seite mit Fehler.
+    GET ?code=XXXXXX fuellt nur das Feld vor - ein geteilter Link fuehrt also nie direkt zu Twitch."""
+    raw = (form or {}).get("code", "") if form is not None else first(params, "code")
+    code = re.sub(r"[^A-Za-z0-9]", "", raw).upper()[:8]
     err = ""
-    if code:
-        hit = _short.get(code)
-        if hit and hit[1] > time.time():
-            log.info("Aktivierung: Code %s -> Twitch", code)
-            return 302, hit[0], ""
-        err = "Der Code %s ist unbekannt oder abgelaufen. Melde dich auf der Vita neu an, dann bekommst du einen neuen." % code
-        log.warning("Aktivierung: unbekannter Code %s", code)
+    if form is not None:
+        if not rate_ok("activate", req._client_ip(), 30, 600):
+            err = "Zu viele Versuche. Bitte in ein paar Minuten noch einmal."
+        elif code:
+            hit = _short.get(code)
+            if hit and hit[1] > time.time():
+                log.info("Aktivierung: Code %s -> Twitch", code)
+                return 302, hit[0], ""
+            err = "Der Code %s ist unbekannt oder abgelaufen. Melde dich auf der Vita neu an, dann bekommst du einen neuen." % code
+            log.warning("Aktivierung: unbekannter Code %s", code)
     elif req.path.split("?")[0].rstrip("/") == "/activate":
-        return 302, "/#aktivieren", ""
+        return 302, ("/?code=%s#aktivieren" % code) if code else "/#aktivieren", ""
     page = static_page("index.html", {"{ACT_ERR}": err, "{ACT_CODE}": code,
                                       "{ACT_ERR_CLASS}": "show" if err else ""})
     if page is None:
         raise ApiError(404, "www/index.html missing")
     return 200, None, page
+
+
+def html_security_headers(page):
+    """CSP mit Hash des eingebetteten Skripts + Schutz gegen Einbetten (Clickjacking)."""
+    hashes = " ".join("'sha256-%s'" % base64.b64encode(hashlib.sha256(m.encode()).digest()).decode()
+                      for m in re.findall(r"<script>(.*?)</script>", page, re.S))
+    csp = ("default-src 'none'; script-src %s; style-src 'unsafe-inline'; img-src 'self' data:; "
+           "connect-src 'self'; form-action 'self' https://www.twitch.tv https://id.twitch.tv https://passport.twitch.tv; "
+           "base-uri 'none'; frame-ancestors 'none'" % (hashes or "'none'"))
+    return {"Content-Security-Policy": csp, "X-Frame-Options": "DENY",
+            "Permissions-Policy": "camera=(), microphone=(), geolocation=(), interest-cohort=()",
+            "Cross-Origin-Opener-Policy": "same-origin"}
 
 
 # --------------------------------------------------------------------------
@@ -1951,6 +1984,18 @@ class Handler(BaseHTTPRequestHandler):
         return (self.command in ("GET", "HEAD") and "text/html" in self.headers.get("Accept", "")
                 and "Sony-PSV" not in ua and not any(t in host for t in ("twitch", "ttvnw", "justin", "mixpanel")))
 
+    def _insecure(self):
+        return (self.headers.get("X-Forwarded-Proto") or "https").lower() == "http"
+
+    def _redirect(self, code, location):
+        self.send_response(code)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.end_headers()
+        return code, 0
+
     def _send_text(self, code, text, ctype, head, cache=0, extra=None):
         body = text.encode("utf-8")
         self.send_response(code)
@@ -2082,31 +2127,31 @@ class Handler(BaseHTTPRequestHandler):
                 if not head:
                     self.wfile.write(body)
                 status, size = 200, 1
+            elif (path == "/activate" or path == "/link" or (path in ("/", "/index.html") and self._wants_html())) \
+                    and self._insecure():
+                # Browser-Seiten nur ueber HTTPS (Port 80 ist nur fuer die Stream-Links der Vita da)
+                if self.command == "POST":
+                    status, size = self._send_text(403, '{"ok":false,"error":"Nur ueber HTTPS."}',
+                                                   "application/json; charset=utf-8", head)
+                else:
+                    status, size = self._redirect(301, "https://" + PUBLIC_HOST + self.path)
             elif path == "/activate" or (path in ("/", "/index.html") and self._wants_html()):
-                code, location, page = activate_page(self, params)
-                body = page.encode("utf-8")
-                self.send_response(code)
+                form = None
+                if self.command == "POST":
+                    form = dict(urllib.parse.parse_qsl(getattr(self, "_body", b"").decode("utf-8", "replace")))
+                code, location, page = activate_page(self, params, form)
                 if location:
-                    self.send_header("Location", location)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.send_header("Cache-Control", "no-store")
-                self.send_header("Referrer-Policy", "no-referrer")
-                self.end_headers()
-                if not head:
-                    self.wfile.write(body)
-                status, size = code, len(body)
+                    status, size = self._redirect(code, location)
+                else:
+                    status, size = self._send_text(code, page, "text/html; charset=utf-8", head,
+                                                   extra=html_security_headers(page))
             elif path == "/link" and self.command == "POST":
                 form = dict(urllib.parse.parse_qsl(getattr(self, "_body", b"").decode("utf-8", "replace")))
                 code, res = link_action(self, form)
                 status, size = self._send_text(code, json.dumps(res, ensure_ascii=False),
                                                "application/json; charset=utf-8", head)
             elif path == "/link":
-                self.send_response(302)
-                self.send_header("Location", "/#werbefrei")
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-                status, size = 302, 0
+                status, size = self._redirect(302, "/#werbefrei")
             elif path == "/redirects.txt":
                 status, size = self._send_text(200, redirects_txt(), "text/plain; charset=utf-8", head, cache=300,
                                                extra={"Content-Disposition": 'attachment; filename="redirects.txt"'})

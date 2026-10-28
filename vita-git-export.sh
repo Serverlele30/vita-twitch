@@ -25,7 +25,10 @@ cp_first www/index.html                /opt/vita-twitch/www/index.html "$PKG/www
 rm -f "$REPO/www/link.html"   # seit 2.27 alles auf einer Seite
 cp_first systemd/vita-twitch.service   /etc/systemd/system/vita-twitch.service "$PKG/systemd/vita-twitch.service"
 cp_first nginx/vita-twitch.conf        /root/npm/data/nginx/custom/http.conf "$PKG/nginx/vita-twitch.conf"
-cp_first cron/vita-twitch-cert         /etc/cron.d/vita-twitch-cert "$PKG/cron/vita-twitch-cert"
+cp_first bin/vita-cert-renew           /usr/local/sbin/vita-cert-renew "$PKG/bin/vita-cert-renew"
+cp_first systemd/vita-cert-renew.service /etc/systemd/system/vita-cert-renew.service "$PKG/systemd/vita-cert-renew.service"
+cp_first systemd/vita-cert-renew.timer /etc/systemd/system/vita-cert-renew.timer "$PKG/systemd/vita-cert-renew.timer"
+rm -rf "$REPO/cron"   # seit 2.29: systemd-Timer statt Cron
 cp_first bin/vita-timeline             /usr/local/sbin/vita-timeline "$PKG/bin/vita-timeline"
 cp_first bin/vita-twitch-check         /usr/local/sbin/vita-twitch-check "$PKG/bin/vita-twitch-check"
 cp_first dns/dnsmasq-vita.conf         /etc/dnsmasq.d/vita.conf /root/vita-dnsmasq.conf.bak

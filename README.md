@@ -94,7 +94,7 @@ bash install.sh                      # noch einmal: installiert, prüft nginx un
 vita-twitch-check https://<host> --verify
 ```
 
-`install.sh` sichert vorher alles nach `/root/vita-twitch-backup-<Zeit>`, testet die nginx-Konfiguration und stellt den alten Stand wieder her, wenn etwas schiefgeht. Eine vorhandene env-Datei bleibt unangetastet. Den Beispiel-Host `ytv.serverlele.de` ersetzt du in `nginx/`, `cron/` und `vita/` durch deinen eigenen.
+`install.sh` sichert vorher alles nach `/root/vita-twitch-backup-<Zeit>`, testet die nginx-Konfiguration und stellt den alten Stand wieder her, wenn etwas schiefgeht. Eine vorhandene env-Datei bleibt unangetastet. Den Beispiel-Host `ytv.serverlele.de` ersetzt du in `nginx/`, `vita/` und gegebenenfalls `VITA_CERT_NAME` durch deinen eigenen.
 
 <details>
 <summary><b>Einstellungen in <code>/etc/vita-twitch.env</code></b></summary>
@@ -123,7 +123,7 @@ vita-twitch-check https://<host> --verify
 | `www/index.html` | `/opt/vita-twitch/www/`, die Startseite |
 | `systemd/vita-twitch.service` | `/etc/systemd/system/` |
 | `nginx/vita-twitch.conf` | `/root/npm/data/nginx/custom/http.conf` |
-| `cron/vita-twitch-cert` | `/etc/cron.d/`, verlängert das RSA-Zertifikat |
+| `bin/vita-cert-renew` + `systemd/vita-cert-renew.{service,timer}` | prüft das RSA-Zertifikat täglich und verlängert es bei Bedarf (certbot im NPM-Container) |
 | `bin/vita-timeline` | Zeitleiste aller Vita-Anfragen mit markierten Pausen |
 | `bin/vita-twitch-check` | prüft über 1500 Punkte aller Endpunkte |
 | `vita/redirects.txt` | Vorlage für tls_fixer |
@@ -148,6 +148,8 @@ curl -s https://<host>/health                     # Status und Live-Zähler
 - Die freiwillig hinterlegten Website-Tokens werden mit AES-GCM verschlüsselt gespeichert. Twitch bestätigt, wem ein Token gehört, und es wirkt nur für dieses Konto. Stündlich wird es geprüft, ungültige werden automatisch gelöscht. Das Lesezeichen übergibt das Token im `#`-Teil der Adresse, und der wird nie an einen Server gesendet.
 - Stream-Links sind per HMAC signiert und nur zu Twitch-Hosts erlaubt. Wiedergabe-Tokens sind signiert und lassen sich nicht fälschen.
 - Der Live-Zähler zeigt nach außen nur Anzahlen, keine IPs.
+- Browser-Seiten laufen nur über HTTPS, mit strenger CSP (Skript per Hash) und Schutz gegen Einbetten. Ein Code wird nur über das Formular freigegeben, nicht über einen Link. Login-Start, Code-Eingabe und Token-Verknüpfung sind je IP begrenzt.
+- Die Zuordnung eines Streams zum Konto über die IP lässt sich mit `VITA_IP_MATCH_HOURS=0` abschalten.
 
 ## 🚧 Grenzen
 

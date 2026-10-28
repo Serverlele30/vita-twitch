@@ -1,0 +1,8 @@
+[Unit]
+Description=PS-Vita-Twitch: RSA-Zertifikat ytv-rsa verlaengern
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/vita-cert-renew
