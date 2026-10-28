@@ -37,7 +37,7 @@ fi
 echo "== Repo-eigene Dateien"
 # Diese Dateien gibt es nicht "live" auf dem Server, sie gehoeren dem Repo.
 # Wird das Skript aus einem Update-Ordner gestartet, ersetzt es sie durch die Fassung von dort.
-for f in README.md .gitignore vita-git-export.sh install.sh vita/redirects.txt vita-twitch.env.example; do
+for f in README.md CHANGELOG.md .gitignore vita-git-export.sh install.sh vita/redirects.txt vita-twitch.env.example; do
   if [ "$HERE" != "$REPO" ] && [ -f "$HERE/$f" ]; then
     install -D -m 644 "$HERE/$f" "$REPO/$f"
   elif [ ! -f "$REPO/$f" ]; then
