@@ -39,7 +39,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.25"
+VERSION = "2.27"
 
 HOST = os.environ.get("VITA_TWITCH_HOST", "127.0.0.1")
 PORT = int(os.environ.get("VITA_TWITCH_PORT", "8443"))
@@ -889,7 +889,7 @@ def ep_vod_token(base, params, req, vid):
 def ep_vod_hls(base, params, req, vid):
     who, src = viewer_login(req, params)
     web = web_token_for(who)
-    key = ("vodhls", vid, web)
+    key = ("vodhls", vid, hashlib.sha256(web.encode()).hexdigest()[:12] if web else "anon")
     playlist = cache.get(key)
     if playlist is None:
         log.info("VOD %s fuer %s (%s): %s", vid, who or "nicht angemeldet", src or "-",
@@ -1038,11 +1038,181 @@ def viewer_login(req, params):
     return None, None
 
 
+# --------------------------------------------------------------------------
+# Eigene Web-Tokens der Nutzer (freiwillig ueber /link hinterlegt)
+# Twitch gibt werbefreie Wiedergabe (Turbo/Abo) nur an Tokens der offiziellen Website aus.
+# Jeder kann deshalb sein eigenes auth-token hinterlegen; es wird NUR fuer genau dieses Konto benutzt.
+# --------------------------------------------------------------------------
+WEB_CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"      # oeffentliche Client-ID der Twitch-Website
+TOKENS_FILE = os.path.join(STATE_DIR, "webtokens.json")
+_webtok = {}            # login -> {"user_id", "token", "turbo", "checked", "added"}
+_webtok_lock = threading.Lock()
+_link_hits = {}         # IP -> [Zeitstempel] (einfaches Limit fuer /link)
+REVALIDATE = 3600       # Sekunden zwischen zwei Pruefungen eines Tokens
+
+
+def _cipher():
+    """AES-GCM mit eigenem Schluessel in STATE_DIR (falls python3-cryptography vorhanden)."""
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    except ImportError:
+        return None
+    path = os.path.join(STATE_DIR, "webtokens.key")
+    try:
+        with open(path, "rb") as fh:
+            key = fh.read()
+    except OSError:
+        key = AESGCM.generate_key(bit_length=256)
+        os.makedirs(STATE_DIR, exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(key)
+    return AESGCM(key)
+
+
+def _load_webtokens():
+    try:
+        with open(TOKENS_FILE, encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except FileNotFoundError:
+        return
+    except Exception as exc:
+        log.error("webtokens.json nicht lesbar: %s", exc)
+        return
+    aes = _cipher()
+    for login, v in raw.items():
+        try:
+            if "enc" in v:
+                if not aes:
+                    log.error("Gespeicherte Web-Tokens sind verschluesselt, python3-cryptography fehlt")
+                    return
+                blob = base64.b64decode(v.pop("enc"))
+                v["token"] = aes.decrypt(blob[:12], blob[12:], login.encode()).decode()
+            _webtok[login] = v
+        except Exception as exc:
+            log.error("Web-Token von %s nicht lesbar: %s", login, type(exc).__name__)
+    log.info("%d eigene Web-Tokens geladen%s", len(_webtok), "" if aes else " (UNVERSCHLUESSELT gespeichert)")
+
+
+def _save_webtokens():
+    aes = _cipher()
+    out = {}
+    for login, v in _webtok.items():
+        v = dict(v)
+        if aes:
+            nonce = secrets.token_bytes(12)
+            v["enc"] = base64.b64encode(nonce + aes.encrypt(nonce, v.pop("token").encode(), login.encode())).decode()
+        out[login] = v
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        tmp = TOKENS_FILE + ".tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(out, fh)
+        os.replace(tmp, TOKENS_FILE)
+    except Exception as exc:
+        log.error("Web-Tokens nicht gespeichert: %s", exc)
+
+
+def check_web_token(token):
+    """Prueft ein auth-token bei Twitch -> {"login", "user_id", "turbo"}; ApiError wenn ungueltig."""
+    if not re.fullmatch(r"[a-z0-9]{20,40}", token or ""):
+        raise ApiError(400, "Das sieht nicht wie ein auth-token aus (30 Zeichen, a-z und 0-9).")
+    try:
+        v = http_json("https://id.twitch.tv/oauth2/validate", headers={"Authorization": "OAuth " + token})
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401:
+            raise ApiError(401, "Twitch kennt dieses Token nicht (abgemeldet oder abgelaufen).")
+        raise ApiError(502, "Twitch-Pruefung fehlgeschlagen (HTTP %d)" % exc.code)
+    if v.get("client_id") != WEB_CLIENT_ID:
+        log.warning("/link: Token mit fremder Client-ID %s abgelehnt", (v.get("client_id") or "?")[:6] + "...")
+        raise ApiError(400, "Das ist kein Token der Twitch-Website (auth-token-Cookie verwenden).")
+    turbo = False
+    try:
+        req = urllib.request.Request("https://gql.twitch.tv/gql", method="POST",
+                                     data=json.dumps({"query": "query{currentUser{hasTurbo}}"}).encode(),
+                                     headers={"Client-Id": WEB_CLIENT_ID, "Authorization": "OAuth " + token,
+                                              "Content-Type": "application/json",
+                                              "User-Agent": "Mozilla/5.0 VitaTwitchAdapter/" + VERSION})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            turbo = bool(((json.loads(resp.read()).get("data") or {}).get("currentUser") or {}).get("hasTurbo"))
+    except Exception as exc:
+        log.warning("Turbo-Abfrage fehlgeschlagen: %s", type(exc).__name__)
+    return {"login": (v.get("login") or "").lower(), "user_id": v.get("user_id", ""), "turbo": turbo}
+
+
+def user_web_token(login):
+    """Eigenes Web-Token dieses Kontos (stuendlich bei Twitch geprueft) oder None."""
+    if not login:
+        return None
+    login = login.lower()
+    with _webtok_lock:
+        ent = _webtok.get(login)
+    if not ent:
+        return None
+    if ent.get("checked", 0) < time.time() - REVALIDATE:
+        try:
+            info = check_web_token(ent["token"])
+        except ApiError as exc:
+            if exc.status in (400, 401):
+                log.warning("Web-Token von %s ungueltig geworden - entfernt", login)
+                with _webtok_lock:
+                    _webtok.pop(login, None)
+                    _save_webtokens()
+                return None
+            return ent["token"]          # Twitch gerade nicht erreichbar -> weiter benutzen
+        with _webtok_lock:
+            ent.update(checked=time.time(), turbo=info["turbo"])
+            _save_webtokens()
+    return ent["token"]
+
+
 def web_token_for(login):
-    """Darf dieses Konto mit dem hinterlegten Web-Token (Turbo/Abo des Besitzers) abspielen?"""
-    if not WEB_AUTH_TOKEN:
+    """Welches Web-Token gilt fuer dieses Konto? Eigenes > Betreiber-Token (nur Besitzer) > keins."""
+    own = user_web_token(login)
+    if own:
+        return own
+    if WEB_AUTH_TOKEN and (WEB_SHARE or bool(login and WEB_OWNER and login.lower() == WEB_OWNER)):
+        return WEB_AUTH_TOKEN
+    return None
+
+
+def has_turbo(login):
+    if not login:
         return False
-    return WEB_SHARE or bool(login and WEB_OWNER and login.lower() == WEB_OWNER)
+    with _webtok_lock:
+        ent = _webtok.get(login.lower())
+    if ent:
+        return bool(ent.get("turbo"))
+    return TURBO and bool(WEB_AUTH_TOKEN) and bool(WEB_OWNER) and login.lower() == WEB_OWNER
+
+
+def link_action(req, form):
+    """POST /link: action=add|remove, auth_token=... -> (status, dict)."""
+    ip, now = req._client_ip(), time.time()
+    hits = [t for t in _link_hits.get(ip, []) if t > now - 600]
+    if len(hits) >= 10:
+        return 429, {"ok": False, "error": "Zu viele Versuche. Bitte in ein paar Minuten noch einmal."}
+    _link_hits[ip] = hits + [now]
+    token = (form.get("auth_token") or "").strip().strip('"').lower()
+    if token.startswith("auth-token="):
+        token = token.split("=", 1)[1]
+    try:
+        info = check_web_token(token)
+    except ApiError as exc:
+        return exc.status, {"ok": False, "error": exc.message}
+    login = info["login"]
+    with _webtok_lock:
+        if form.get("action") == "remove":
+            gone = _webtok.pop(login, None) is not None
+            _save_webtokens()
+            log.info("Web-Token von %s entfernt", login)
+            return 200, {"ok": True, "login": login, "removed": gone}
+        _webtok[login] = {"user_id": info["user_id"], "token": token, "turbo": info["turbo"],
+                          "checked": now, "added": _webtok.get(login, {}).get("added", now)}
+        _save_webtokens()
+    log.info("Web-Token von %s hinterlegt (Turbo: %s)", login, "ja" if info["turbo"] else "nein")
+    return 200, {"ok": True, "login": login, "turbo": info["turbo"]}
 
 
 def ep_access_token(base, params, req, login):
@@ -1069,11 +1239,12 @@ def write_cookie_file(directory, token):
     return path
 
 
-def run_ytdlp(login, web=True):
+def run_ytdlp(login, web=None):
     return ytdlp_extract("https://www.twitch.tv/" + login, "Stream not available: ", login, web)
 
 
-def ytdlp_extract(url, errprefix, login_for_fallback=None, web=True):
+def ytdlp_extract(url, errprefix, login_for_fallback=None, web=None):
+    """web: auth-token, mit dem abgespielt wird (None = anonym)."""
     """yt-dlp direkt im Prozess (spart ~2 s Start pro Stream); Fallback: Unterprozess."""
     try:
         import yt_dlp
@@ -1085,8 +1256,8 @@ def ytdlp_extract(url, errprefix, login_for_fallback=None, web=True):
     tmpdir = tempfile.mkdtemp(prefix="vita-yt-")
     opts = {"quiet": True, "no_warnings": True, "noplaylist": True, "cachedir": False,
             "skip_download": True, "socket_timeout": 15, "logger": _YtLog()}
-    if WEB_AUTH_TOKEN and web:
-        opts["cookiefile"] = write_cookie_file(tmpdir, WEB_AUTH_TOKEN)
+    if web:
+        opts["cookiefile"] = write_cookie_file(tmpdir, web)
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             return ydl.extract_info(url, download=False)
@@ -1111,7 +1282,7 @@ class _YtLog:
         log.info("yt-dlp: %s", str(msg)[:200])
 
 
-def run_ytdlp_subprocess(login, web=True):
+def run_ytdlp_subprocess(login, web=None):
     """Liefert die yt-dlp-Formatliste eines Live-Kanals (enthaelt die Variant-Playlists)."""
     cmd = [sys.executable, "-m", "yt_dlp", "-J", "--no-warnings", "--no-cache-dir",
            "--no-playlist", "https://www.twitch.tv/" + login]
@@ -1120,10 +1291,10 @@ def run_ytdlp_subprocess(login, web=True):
         env.pop(k, None)  # Secrets nicht ueber die Umgebung an den Kindprozess
     tmpdir = None
     try:
-        if WEB_AUTH_TOKEN and web:
+        if web:
             import tempfile
             tmpdir = tempfile.mkdtemp(prefix="vita-yt-")
-            cmd[3:3] = ["--cookies", write_cookie_file(tmpdir, WEB_AUTH_TOKEN)]
+            cmd[3:3] = ["--cookies", write_cookie_file(tmpdir, web)]
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env)
     finally:
         if tmpdir:
@@ -1231,7 +1402,7 @@ def ep_hls(base, params, req, login):
         raise ApiError(404, "Channel not found")
     who, src = viewer_login(req, params)
     web = web_token_for(who)
-    key = ("hls", login, web)
+    key = ("hls", login, hashlib.sha256(web.encode()).hexdigest()[:12] if web else "anon")
     playlist = cache.get(key)
     if playlist is None:
         log.info("Stream %s fuer %s (%s): %s", login, who or "nicht angemeldet", src or "-",
@@ -1249,7 +1420,7 @@ def ep_hls(base, params, req, login):
 _pending = {}           # PSN-Token -> {"device_code", "user_code", "uri", "expires", "session"}
 _short = {}             # 6-stelliger Vita-Code -> (Aktivierungs-URL, Ablaufzeit)
 SHORT_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"   # ohne 0/O und 1/I
-ACTIVATE_URL = os.environ.get("VITA_ACTIVATE_URL", PUBLIC_HOST + "/activate")
+ACTIVATE_URL = os.environ.get("VITA_ACTIVATE_URL", PUBLIC_HOST)
 
 
 def new_short_code():
@@ -1530,43 +1701,38 @@ def ep_follow_status(base, params, req, login, target):
                  "channel": channel_obj(base, tu)}
 
 
-ACTIVATE_PAGE = """<!doctype html><html lang="de"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Vita Twitch Login</title>
-<style>body{font-family:system-ui,sans-serif;background:#18181b;color:#efeff1;margin:0;display:flex;
-min-height:100vh;align-items:center;justify-content:center}main{max-width:22rem;padding:1.5rem;text-align:center}
-h1{font-size:1.3rem;margin:0 0 .5rem}p{color:#adadb8;margin:.4rem 0 1.2rem}
-input{font:600 2rem ui-monospace,monospace;letter-spacing:.3em;text-transform:uppercase;width:100%;
-box-sizing:border-box;padding:.6rem;border-radius:.5rem;border:2px solid #9147ff;background:#0e0e10;color:#fff;text-align:center}
-button{margin-top:1rem;width:100%;padding:.8rem;font-size:1.1rem;border:0;border-radius:.5rem;background:#9147ff;color:#fff}
-.err{color:#ff8080}</style></head><body><main><h1>PS Vita mit Twitch verbinden</h1>
-<p>Gib den 6-stelligen Code von der Vita ein.</p>{ERR}
-<form method="get" action="/activate"><input name="code" maxlength="8" autocomplete="off" autocapitalize="characters"
-autofocus required pattern="[A-Za-z0-9 ]{6,8}" value="{CODE}"><button>Weiter zu Twitch</button></form></main></body></html>"""
-
-
 def activate_page(req, params):
-    """GET /activate[?code=XXXXXX] -> Formular bzw. Weiterleitung zur Twitch-Freigabe."""
-    code = re.sub(r"[^A-Za-z0-9]", "", first(params, "code")).upper()
+    """Startseite fuer Browser. ?code=XXXXXX -> Weiterleitung zur Twitch-Freigabe,
+    unbekannter Code -> Seite mit Fehlermeldung. /activate leitet nur noch hierher."""
+    code = re.sub(r"[^A-Za-z0-9]", "", first(params, "code")).upper()[:8]
     err = ""
     if code:
         hit = _short.get(code)
         if hit and hit[1] > time.time():
-            log.info("Aktivierungsseite: Code %s -> Twitch", code)
+            log.info("Aktivierung: Code %s -> Twitch", code)
             return 302, hit[0], ""
-        err = '<p class="err">Code unbekannt oder abgelaufen. Auf der Vita neu anmelden.</p>'
-        log.warning("Aktivierungsseite: unbekannter Code %s", code)
-    return 200, None, ACTIVATE_PAGE.replace("{ERR}", err).replace("{CODE}", html.escape(code))
+        err = "Der Code %s ist unbekannt oder abgelaufen. Melde dich auf der Vita neu an, dann bekommst du einen neuen." % code
+        log.warning("Aktivierung: unbekannter Code %s", code)
+    elif req.path.split("?")[0].rstrip("/") == "/activate":
+        return 302, "/#aktivieren", ""
+    page = static_page("index.html", {"{ACT_ERR}": err, "{ACT_CODE}": code,
+                                      "{ACT_ERR_CLASS}": "show" if err else ""})
+    if page is None:
+        raise ApiError(404, "www/index.html missing")
+    return 200, None, page
 
 
-def info_page():
-    """Infoseite aus www/index.html, Platzhalter {HOST} {VERSION} {REPO} {REPO_SHORT} ersetzt."""
+def static_page(name, extra=None):
+    """Seite aus www/, Platzhalter {HOST} {VERSION} {REPO} {REPO_SHORT} (+ extra) ersetzt."""
     try:
-        with open(os.path.join(WWW_DIR, "index.html"), encoding="utf-8") as fh:
+        with open(os.path.join(WWW_DIR, name), encoding="utf-8") as fh:
             page = fh.read()
     except OSError:
         return None
     short = re.sub(r"^https?://", "", REPO_URL).rstrip("/")
-    for k, v in (("{HOST}", PUBLIC_HOST), ("{VERSION}", VERSION), ("{REPO_SHORT}", short), ("{REPO}", REPO_URL)):
+    pairs = [("{HOST}", PUBLIC_HOST), ("{VERSION}", VERSION), ("{REPO_SHORT}", short), ("{REPO}", REPO_URL)]
+    pairs += list((extra or {"{ACT_ERR}": "", "{ACT_CODE}": "", "{ACT_ERR_CLASS}": ""}).items())
+    for k, v in pairs:
         page = page.replace(k, html.escape(v))
     return page
 
@@ -1636,7 +1802,7 @@ def ep_viewer(base, params, req, login):
     except ApiError:
         sess = None
     subbed = is_subscribed(sess, login) if sess else False
-    turbo = TURBO and web_token_for((sess or {}).get("login"))
+    turbo = has_turbo((sess or {}).get("login"))
     return 200, {"chansub": subbed, "turbo": turbo, "has_ad_free_subscription": subbed or turbo,
                  "is_admin": False, "is_staff": False, "login": (sess or {}).get("login", "")}
 
@@ -1647,7 +1813,7 @@ def ep_api_user(base, params, req):
         sess = session_from(req, params)
     except ApiError:
         sess = None
-    turbo = TURBO and web_token_for((sess or {}).get("login"))
+    turbo = has_turbo((sess or {}).get("login"))
     return 200, {"turbo_code": "turbo" if turbo else None, "turbo": turbo,
                  "login": (sess or {}).get("login", ""), "name": (sess or {}).get("login", "")}
 
@@ -1878,7 +2044,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not head:
                     self.wfile.write(body)
                 status, size = 200, 1
-            elif path == "/activate":
+            elif path == "/activate" or (path in ("/", "/index.html") and self._wants_html()):
                 code, location, page = activate_page(self, params)
                 body = page.encode("utf-8")
                 self.send_response(code)
@@ -1892,8 +2058,17 @@ class Handler(BaseHTTPRequestHandler):
                 if not head:
                     self.wfile.write(body)
                 status, size = code, len(body)
-            elif path in ("/", "/index.html") and self._wants_html() and info_page() is not None:
-                status, size = self._send_text(200, info_page(), "text/html; charset=utf-8", head, cache=300)
+            elif path == "/link" and self.command == "POST":
+                form = dict(urllib.parse.parse_qsl(getattr(self, "_body", b"").decode("utf-8", "replace")))
+                code, res = link_action(self, form)
+                status, size = self._send_text(code, json.dumps(res, ensure_ascii=False),
+                                               "application/json; charset=utf-8", head)
+            elif path == "/link":
+                self.send_response(302)
+                self.send_header("Location", "/#werbefrei")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                status, size = 302, 0
             elif path == "/redirects.txt":
                 status, size = self._send_text(200, redirects_txt(), "text/plain; charset=utf-8", head, cache=300,
                                                extra={"Content-Disposition": 'attachment; filename="redirects.txt"'})
@@ -1952,8 +2127,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         length = as_int(self.headers.get("Content-Length"), 0, 0, 65536)
-        if length:
-            self.rfile.read(length)  # verwerfen, aber Verbindung sauber halten
+        self._body = self.rfile.read(length) if length else b""
         self._handle()
 
     do_PUT = do_POST
@@ -1987,6 +2161,7 @@ def main():
         log.error("Start-Check Twitch-Token fehlgeschlagen: %s (Dienst laeuft weiter)", exc.message)
     _load_sessions()
     _load_hls_key()
+    _load_webtokens()
     if WEB_AUTH_TOKEN:
         try:
             v = http_json("https://id.twitch.tv/oauth2/validate", headers={"Authorization": "OAuth " + WEB_AUTH_TOKEN})

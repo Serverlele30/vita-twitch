@@ -17,6 +17,7 @@ warn() { echo "  [!!] $*"; }
 
 echo "== Voraussetzungen"
 python3 -c "import yt_dlp" 2>/dev/null && ok "yt-dlp" || { warn "yt-dlp fehlt: pip3 install --break-system-packages yt-dlp"; exit 1; }
+python3 -c "import cryptography" 2>/dev/null && ok "cryptography" || { apt-get install -y -q python3-cryptography >/dev/null && ok "cryptography installiert"; }
 python3 -c "import PIL" 2>/dev/null   && ok "Pillow" || { apt-get install -y -q python3-pil >/dev/null && ok "Pillow installiert"; }
 docker inspect $NPM >/dev/null 2>&1 && ok "NPM-Container $NPM" || { warn "NPM-Container $NPM nicht gefunden"; exit 1; }
 python3 -m py_compile adapter.py && ok "adapter.py Syntax"
@@ -32,7 +33,8 @@ echo "== Dateien"
 install -d -m 750 /opt/vita-twitch /var/log/vita-twitch
 install -m 750 adapter.py /opt/vita-twitch/adapter.py
 install -d -m 755 /opt/vita-twitch/www
-install -m 644 www/index.html /opt/vita-twitch/www/index.html
+install -m 644 www/index.html /opt/vita-twitch/www/
+rm -f /opt/vita-twitch/www/link.html   # seit 2.27 alles auf einer Seite
 install -m 750 bin/vita-timeline bin/vita-twitch-check /usr/local/sbin/
 install -m 644 systemd/vita-twitch.service /etc/systemd/system/vita-twitch.service
 rm -rf /etc/systemd/system/vita-twitch.service.d   # Drop-ins sind jetzt in der Unit enthalten

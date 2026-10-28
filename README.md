@@ -8,10 +8,10 @@ Die App bleibt unverändert, es wird kein Patch eingespielt. Die Vita leitet die
 - Startseite, Top-Spiele, Spiele-Verzeichnis, Suche (Streams, Kanäle, Spiele)
 - Live-Wiedergabe: H.264 bis 720p, bevorzugt 480p, über einen signierten HLS-Proxy
 - VODs: Übertragungen und Highlights
-- Login per 6-stelligem Code: Die Vita zeigt den Code, freigegeben wird er im Browser unter `https://<host>/activate` (im Hintergrund der Twitch Device Code Flow); die Sitzung wird automatisch erneuert
+- Login per 6-stelligem Code: Die Vita zeigt den Code, freigegeben wird er auf der Startseite `https://<host>/` (im Hintergrund der Twitch Device Code Flow); die Sitzung wird automatisch erneuert
 - Gefolgte Kanäle, Profile mit Follower-Zahl, Aufrufen und Banner
-- **Werbefrei mit Turbo/Abo** für das Konto, dessen Web-`auth-token` hinterlegt ist. Alle anderen Konten spielen anonym ab, Twitch blendet dann die üblichen Werbespots ein. Das Konto auf der Vita erkennt der Adapter an der Sitzung, am signierten Wiedergabe-Token oder an der IP der letzten Anmeldung.
-- Infoseite für Browser unter `/` mit Anleitung, Live-Status und `redirects.txt` zum Download (`/redirects.txt`)
+- **Werbefrei mit Turbo, Abo oder Prime, pro Konto:** Jeder Nutzer kann auf der Startseite (Abschnitt „Werbefrei“) sein eigenes Website-`auth-token` hinterlegen, per Lesezeichen-Button auf twitch.tv oder von Hand. Der Adapter prüft bei Twitch, wem das Token gehört, und benutzt es nur für dieses Konto. Turbo erkennt er automatisch. Gespeichert wird es mit AES-GCM verschlüsselt (`/var/lib/vita-twitch/webtokens.json`) und stündlich auf Gültigkeit geprüft; abgemeldete Tokens werden automatisch gelöscht. Ohne Token wird anonym abgespielt, mit der üblichen Werbung. Das Konto auf der Vita erkennt der Adapter an der Sitzung, am signierten Wiedergabe-Token oder an der IP der letzten Anmeldung.
+- Eine Startseite für alles unter `/`: Code-Eingabe, Werbefrei-Verknüpfung per Lesezeichen, Einrichtung mit `redirects.txt` (auch als Download), Live-Status und FAQ. `/activate` und `/link` leiten nur noch dorthin weiter.
 - Analytics-Endpunkte (spade, mixpanel) werden sofort beantwortet, damit die App nicht blockiert
 
 ## Aufbau
@@ -27,7 +27,7 @@ Warum RSA und CBC: Der ältere TLS-Stack der Vita kennt nur `TLS_RSA_WITH_AES_*_
 | Pfad | Ziel auf dem Server |
 |---|---|
 | `adapter.py` | `/opt/vita-twitch/adapter.py` |
-| `www/index.html` | `/opt/vita-twitch/www/` – Infoseite, die Browser unter `/` sehen |
+| `www/index.html` | `/opt/vita-twitch/www/` – eine Seite für alles: Anmelden mit Code, Werbefrei-Verknüpfung, Einrichtung, Infos |
 | `systemd/vita-twitch.service` | `/etc/systemd/system/` |
 | `nginx/vita-twitch.conf` | `/root/npm/data/nginx/custom/http.conf` (NPM) |
 | `cron/vita-twitch-cert` | `/etc/cron.d/` – Verlängerung des RSA-Zertifikats |
@@ -51,7 +51,7 @@ Voraussetzungen: Python 3, `yt-dlp`, Pillow, Nginx Proxy Manager als Container `
 ## Vita
 - HENkaku/Enso, **tls_fixer** und **iTLS** installiert, die Einträge aus `vita/redirects.txt` in die `redirects.txt` von tls_fixer übernehmen.
 - `ytv.serverlele.de` in `redirects.txt` durch den eigenen Host ersetzen.
-- Login: Den Code von der Vita unter `https://<host>/activate` eingeben.
+- Login: Den Code von der Vita auf `https://<host>/` eingeben.
 
 ## Diagnose
 ```bash
@@ -61,7 +61,7 @@ vita-twitch-check https://<host> --verify
 ```
 
 ## Grenzen
-- Werbefrei für **andere** Konten mit Turbo/Abo geht nicht automatisch: Werbefreie Streams gibt Twitch nur an Tokens der offiziellen Twitch-Website und -Apps aus, nicht an Drittanbieter-Logins wie diesen.
+- Werbefreiheit braucht das Website-Token des jeweiligen Kontos: Werbefreie Streams gibt Twitch nur an Tokens der offiziellen Website heraus, nicht an Drittanbieter-Logins. Eine Website kann das Cookie von twitch.tv nicht selbst auslesen, deshalb gibt es den Lesezeichen-Button.
 - Kein QR-Code-Login: Der Bildlader der App kann ihn nicht darstellen, deshalb gibt es den 6-stelligen Code.
 - Kein Chat: Die Vita-App hatte nie einen.
 - Folgen und Entfolgen sind nicht möglich, weil Twitch das per API abgeschafft hat.

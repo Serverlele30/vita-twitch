@@ -22,6 +22,7 @@ mkdir -p "$REPO"; cd "$REPO"
 echo "== Live-Dateien uebernehmen"
 cp_first adapter.py                    /opt/vita-twitch/adapter.py "$PKG/adapter.py"
 cp_first www/index.html                /opt/vita-twitch/www/index.html "$PKG/www/index.html"
+rm -f "$REPO/www/link.html"   # seit 2.27 alles auf einer Seite
 cp_first systemd/vita-twitch.service   /etc/systemd/system/vita-twitch.service "$PKG/systemd/vita-twitch.service"
 cp_first nginx/vita-twitch.conf        /root/npm/data/nginx/custom/http.conf "$PKG/nginx/vita-twitch.conf"
 cp_first cron/vita-twitch-cert         /etc/cron.d/vita-twitch-cert "$PKG/cron/vita-twitch-cert"
@@ -58,7 +59,7 @@ fi
 grep -qE '^TWITCH_(CLIENT_SECRET|WEB_AUTH_TOKEN)=.+' vita-twitch.env.example 2>/dev/null && die "env-Beispiel enthaelt Werte"
 # 3) typische Fundstuecke
 grep -rlE --exclude-dir=.git -- '-----BEGIN [A-Z ]*PRIVATE KEY-----' . && die "privater Schluessel im Repo"
-for p in sessions.json hls.key '*.rif' 'zrif*' '*.pem' '*.key' '*.env' eboot.bin; do
+for p in sessions.json 'webtokens*' hls.key '*.rif' 'zrif*' '*.pem' '*.key' '*.env' eboot.bin; do
   [ -n "$(find . -path ./.git -prune -o -name "$p" -print)" ] && die "verbotene Datei im Repo: $p"
 done
 echo "  [ok] keine Secrets gefunden"

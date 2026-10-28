@@ -2,6 +2,7 @@
 *.env
 !vita-twitch.env.example
 sessions.json
+webtokens*
 hls.key
 *.key
 *.pem
