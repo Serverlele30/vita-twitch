@@ -31,6 +31,8 @@ done
 echo "== Dateien"
 install -d -m 750 /opt/vita-twitch /var/log/vita-twitch
 install -m 750 adapter.py /opt/vita-twitch/adapter.py
+install -d -m 755 /opt/vita-twitch/www
+install -m 644 www/index.html /opt/vita-twitch/www/index.html
 install -m 750 bin/vita-timeline bin/vita-twitch-check /usr/local/sbin/
 install -m 644 systemd/vita-twitch.service /etc/systemd/system/vita-twitch.service
 rm -rf /etc/systemd/system/vita-twitch.service.d   # Drop-ins sind jetzt in der Unit enthalten

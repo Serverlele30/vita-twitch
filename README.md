@@ -11,6 +11,7 @@ Die App bleibt unverändert, es wird kein Patch eingespielt. Die Vita leitet die
 - Login per 6-stelligem Code: Die Vita zeigt den Code, freigegeben wird er im Browser unter `https://<host>/activate` (im Hintergrund der Twitch Device Code Flow); die Sitzung wird automatisch erneuert
 - Gefolgte Kanäle, Profile mit Follower-Zahl, Aufrufen und Banner
 - **Werbefrei mit Turbo/Abo**, wenn das `auth-token` des Web-Kontos hinterlegt ist
+- Infoseite für Browser unter `/` mit Anleitung, Live-Status und `redirects.txt` zum Download (`/redirects.txt`)
 - Analytics-Endpunkte (spade, mixpanel) werden sofort beantwortet, damit die App nicht blockiert
 
 ## Aufbau
@@ -26,6 +27,7 @@ Warum RSA und CBC: Der ältere TLS-Stack der Vita kennt nur `TLS_RSA_WITH_AES_*_
 | Pfad | Ziel auf dem Server |
 |---|---|
 | `adapter.py` | `/opt/vita-twitch/adapter.py` |
+| `www/index.html` | `/opt/vita-twitch/www/` – Infoseite, die Browser unter `/` sehen |
 | `systemd/vita-twitch.service` | `/etc/systemd/system/` |
 | `nginx/vita-twitch.conf` | `/root/npm/data/nginx/custom/http.conf` (NPM) |
 | `cron/vita-twitch-cert` | `/etc/cron.d/` – Verlängerung des RSA-Zertifikats |
@@ -47,7 +49,7 @@ bash install.sh
 Voraussetzungen: Python 3, `yt-dlp`, Pillow, Nginx Proxy Manager als Container `npm-npm-1` und eine Twitch-Anwendung (Client-ID und Secret) von dev.twitch.tv. Die Zugangsdaten gehören **ausschließlich** in `/etc/vita-twitch.env`.
 
 ## Vita
-- HENkaku/Enso, **tls_fixer** und **iTLS** installiert, `vita/redirects.txt` nach `ur0:tai/` kopieren.
+- HENkaku/Enso, **tls_fixer** und **iTLS** installiert, die Einträge aus `vita/redirects.txt` in die `redirects.txt` von tls_fixer übernehmen.
 - `ytv.serverlele.de` in `redirects.txt` durch den eigenen Host ersetzen.
 - Login: Den Code von der Vita unter `https://<host>/activate` eingeben.
 

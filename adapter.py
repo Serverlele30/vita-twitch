@@ -39,7 +39,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.23"
+VERSION = "2.24"
 
 HOST = os.environ.get("VITA_TWITCH_HOST", "127.0.0.1")
 PORT = int(os.environ.get("VITA_TWITCH_PORT", "8443"))
@@ -89,6 +89,11 @@ TURBO = os.environ.get("VITA_TURBO", "0") == "1"
 PROFILE_BG = os.environ.get("VITA_PROFILE_BG", "#1f1f23")
 PUBLIC_BASE = os.environ.get("VITA_PUBLIC_BASE", "https://ytv.serverlele.de").rstrip("/")
 PUBLIC_HOST = urllib.parse.urlsplit(PUBLIC_BASE).netloc
+# Infoseite fuer Browser unter "/" (die App bekommt dort weiter JSON)
+WWW_DIR = os.environ.get("VITA_WWW_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "www"))
+REPO_URL = os.environ.get("VITA_REPO_URL", "https://git.serverlele.de/Serverlele30/vita-twitch")
+REDIRECT_HOSTS = ("api.twitch.tv", "usher.twitch.tv", "usher.ttvnw.net", "usher.justin.tv",
+                  "spade.twitch.tv", "api.mixpanel.com")
 # Der Bildlader der App holt Bilder nur von Twitchs Bilderserver -> Ersatzbilder von dort
 DEFAULT_BANNER = "https://static-cdn.jtvnw.net/ttv-static/404_preview-498x280.jpg"
 # Banner abdunkeln, damit die helle Schrift (Follower/Aufrufe/Bio) lesbar bleibt: 1.0 = Original
@@ -1493,6 +1498,25 @@ def activate_page(req, params):
     return 200, None, ACTIVATE_PAGE.replace("{ERR}", err).replace("{CODE}", html.escape(code))
 
 
+def info_page():
+    """Infoseite aus www/index.html, Platzhalter {HOST} {VERSION} {REPO} {REPO_SHORT} ersetzt."""
+    try:
+        with open(os.path.join(WWW_DIR, "index.html"), encoding="utf-8") as fh:
+            page = fh.read()
+    except OSError:
+        return None
+    short = re.sub(r"^https?://", "", REPO_URL).rstrip("/")
+    for k, v in (("{HOST}", PUBLIC_HOST), ("{VERSION}", VERSION), ("{REPO_SHORT}", short), ("{REPO}", REPO_URL)):
+        page = page.replace(k, html.escape(v))
+    return page
+
+
+def redirects_txt():
+    lines = ["# tls_fixer: Twitch-App -> %s" % PUBLIC_HOST]
+    lines += ["%s %s" % (h, PUBLIC_HOST) for h in REDIRECT_HOSTS]
+    return "\n".join(lines) + "\n"
+
+
 _banner_png = []
 
 
@@ -1654,6 +1678,28 @@ class Handler(BaseHTTPRequestHandler):
                 or (self.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
                 or self.client_address[0])
 
+    def _wants_html(self):
+        """Nur echte Browser bekommen die Infoseite - nie die Vita-App oder Twitch-Hostnamen."""
+        ua = self.headers.get("User-Agent", "")
+        host = (self.headers.get("Host") or "").split(":")[0].lower()
+        return (self.command in ("GET", "HEAD") and "text/html" in self.headers.get("Accept", "")
+                and "Sony-PSV" not in ua and not any(t in host for t in ("twitch", "ttvnw", "justin", "mixpanel")))
+
+    def _send_text(self, code, text, ctype, head, cache=0, extra=None):
+        body = text.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "public, max-age=%d" % cache if cache else "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        if not head:
+            self.wfile.write(body)
+        return code, len(body)
+
     def _host(self):
         h = (self.headers.get("X-Forwarded-Host") or self.headers.get("Host") or PUBLIC_HOST)
         h = h.split(",")[0].strip()
@@ -1784,6 +1830,11 @@ class Handler(BaseHTTPRequestHandler):
                 if not head:
                     self.wfile.write(body)
                 status, size = code, len(body)
+            elif path in ("/", "/index.html") and self._wants_html() and info_page() is not None:
+                status, size = self._send_text(200, info_page(), "text/html; charset=utf-8", head, cache=300)
+            elif path == "/redirects.txt":
+                status, size = self._send_text(200, redirects_txt(), "text/plain; charset=utf-8", head, cache=300,
+                                               extra={"Content-Disposition": 'attachment; filename="redirects.txt"'})
             elif pm:
                 status, size = self._proxy(pm.group(1), pm.group(2), pm.group(3), head)
             elif path in ("/", "/test", "/health"):

@@ -21,6 +21,7 @@ mkdir -p "$REPO"; cd "$REPO"
 
 echo "== Live-Dateien uebernehmen"
 cp_first adapter.py                    /opt/vita-twitch/adapter.py "$PKG/adapter.py"
+cp_first www/index.html                /opt/vita-twitch/www/index.html "$PKG/www/index.html"
 cp_first systemd/vita-twitch.service   /etc/systemd/system/vita-twitch.service "$PKG/systemd/vita-twitch.service"
 cp_first nginx/vita-twitch.conf        /root/npm/data/nginx/custom/http.conf "$PKG/nginx/vita-twitch.conf"
 cp_first cron/vita-twitch-cert         /etc/cron.d/vita-twitch-cert "$PKG/cron/vita-twitch-cert"
