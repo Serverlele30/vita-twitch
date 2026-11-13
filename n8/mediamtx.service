@@ -1,0 +1,19 @@
+[Unit]
+Description=MediaMTX (RTSP fuer die Nokia-N8-Twitch-App)
+After=network-online.target vita-twitch.service
+Wants=network-online.target
+
+[Service]
+User=mediamtx
+Group=mediamtx
+WorkingDirectory=/opt/mediamtx
+ExecStart=/opt/mediamtx/mediamtx /opt/mediamtx/mediamtx.yml
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

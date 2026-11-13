@@ -1,0 +1,43 @@
+# MediaMTX fuer die Nokia-N8-Twitch-App
+# Holt den Twitch-Stream ueber den vita-twitch-Adapter (HLS) und stellt ihn per RTSP bereit.
+# Ziel: /opt/mediamtx/mediamtx.yml
+
+logLevel: info
+logDestinations: [stdout]
+
+rtsp: yes
+rtspAddress: :8554
+rtpAddress: :8002
+rtcpAddress: :8003
+
+rtmp: no
+hls: no
+webrtc: no
+srt: no
+moq: no
+api: no
+metrics: no
+pprof: no
+playback: no
+
+# Nur lesen von aussen, veroeffentlichen nur von localhost (ffmpeg)
+authInternalUsers:
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: read
+        path:
+  - user: any
+    pass:
+    ips: ['127.0.0.1', '::1']
+    permissions:
+      - action: publish
+        path:
+
+paths:
+  "~^tw/([a-z0-9_]{1,25})$":
+    runOnDemand: /opt/mediamtx/n8-transcode.sh $G1
+    runOnDemandRestart: yes
+    runOnDemandStartTimeout: 25s
+    runOnDemandCloseAfter: 15s
