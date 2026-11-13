@@ -1,7 +1,11 @@
 # /etc/default/n8-twitch  - Einstellungen fuer n8-transcode.sh
 N8_SRC_BASE=https://ttv.serverlele.de
-# transcode = 360p Baseline (laeuft sicher auf dem N8, ~0,5 Kern pro Stream)
-# copy      = Twitch-Video unveraendert (kaum Last, aber nur wenn das N8 das Profil abspielt)
+# transcode = H.264 Baseline (laeuft sicher auf dem N8) | copy = Twitch-Video unveraendert
 N8_MODE=transcode
 N8_HEIGHT=360
-N8_VBITRATE=700k
+# kbit/s. Stockt es trotzdem: 450 und N8_HEIGHT=288 probieren
+N8_VBITRATE=600
+N8_ABITRATE=64
+N8_FPS=25
+# veryfast = gute Qualitaet; superfast/ultrafast, falls der Server nicht hinterherkommt
+N8_PRESET=veryfast

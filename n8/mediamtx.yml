@@ -5,8 +5,15 @@
 logLevel: info
 logDestinations: [stdout]
 
+# Grosszuegige Zeitlimits und Puffer: kurze WLAN-/Mobilfunk-Aussetzer trennen die Verbindung nicht
+readTimeout: 30s
+writeTimeout: 30s
+writeQueueSize: 4096
+
 rtsp: yes
 rtspAddress: :8554
+# Nur TCP: kommt durch jedes NAT (UDP blieb ohne Laptop schwarz)
+rtspTransports: [tcp]
 rtpAddress: :8002
 rtcpAddress: :8003
 
@@ -41,7 +48,8 @@ paths:
     runOnDemand: /opt/mediamtx/n8-transcode.sh live $G1
     runOnDemandRestart: yes
     runOnDemandStartTimeout: 25s
-    runOnDemandCloseAfter: 15s
+    # laenger offen halten: kurzer Abbruch + Neuverbinden der App findet den Stream noch laufend vor
+    runOnDemandCloseAfter: 30s
   # VOD: rtsp://<host>:8554/vod/<video-id>  (spielt von vorne, ohne Spulen)
   "~^vod/([0-9]{1,15})$":
     runOnDemand: /opt/mediamtx/n8-transcode.sh vod $G1
