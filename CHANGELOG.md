@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.31 – Nokia N8: Wiedergabe
+- `/n8/ram/<login>.ram` und `/n8/ram/vod/<id>.ram`: RealPlayer-Verweis auf den RTSP-Stream (`audio/x-pn-realaudio`), den der Symbian-Browser zuverlaessig an den Videoplayer weitergibt
+- `/n8/stream/<login>` liefert zusaetzlich `ram`, neu `/n8/vod/<id>` fuer VODs
+- Eigene Bild-Links (Banner) gehen an das N8 ebenfalls per `http://`
+
 ## 2.30 – Nokia N8
 - Hostname jetzt `ttv.serverlele.de` (vorher `ytv`), RSA-Zertifikat heisst jetzt `ttv-rsa`
 - N8-Clients (`?client=n8` oder User-Agent `N8Twitch`) bekommen alle Bild-URLs ueber den eigenen Bildproxy per `http://`, verkleinert und ohne Abdunkeln

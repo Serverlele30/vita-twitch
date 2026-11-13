@@ -39,7 +39,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.30"
+VERSION = "2.31"
 
 HOST = os.environ.get("VITA_TWITCH_HOST", "127.0.0.1")
 PORT = int(os.environ.get("VITA_TWITCH_PORT", "8443"))
@@ -1352,6 +1352,8 @@ def n8_images(obj):
         return [n8_images(v) for v in obj]
     if isinstance(obj, str) and obj.startswith("https://static-cdn.jtvnw.net/") and "{" not in obj:
         return n8_image(obj)
+    if isinstance(obj, str) and obj.startswith(PUBLIC_BASE + "/img/"):
+        return N8_HTTP_BASE + obj[len(PUBLIC_BASE):]
     return obj
 
 
@@ -1359,7 +1361,23 @@ def ep_n8_stream(base, params, req, login):
     login = login.lower()
     if not re.fullmatch(r"[a-z0-9_]{1,25}", login):
         raise ApiError(404, "Channel not found")
-    return 200, {"login": login, "rtsp": "%s/tw/%s" % (N8_RTSP_BASE, login)}
+    return 200, {"login": login, "rtsp": "%s/tw/%s" % (N8_RTSP_BASE, login),
+                 "ram": "%s/n8/ram/%s.ram" % (N8_HTTP_BASE, login)}
+
+
+def ep_n8_vod(base, params, req, vid):
+    return 200, {"id": vid, "rtsp": "%s/vod/%s" % (N8_RTSP_BASE, vid),
+                 "ram": "%s/n8/ram/vod/%s.ram" % (N8_HTTP_BASE, vid)}
+
+
+def n8_ram(path):
+    """/n8/ram/<login>.ram bzw. /n8/ram/vod/<id>.ram -> RealPlayer-Verweis auf den RTSP-Stream.
+    Der Symbian-Browser reicht so eine Datei zuverlaessig an den Videoplayer weiter."""
+    m = re.match(r"^/n8/ram/(?:(vod)/(\d{1,15})|([A-Za-z0-9_]{1,25}))\.ram$", path)
+    if not m:
+        return None
+    target = "vod/" + m.group(2) if m.group(1) else "tw/" + m.group(3).lower()
+    return "%s/%s\r\n" % (N8_RTSP_BASE, target)
 
 
 def build_master(info, base_http=None):
@@ -1980,6 +1998,7 @@ def warm_loop():
 ROUTES = [
     (re.compile(r"^/kraken$"), ep_root),
     (re.compile(r"^/n8/stream/([A-Za-z0-9_]+)$"), ep_n8_stream),
+    (re.compile(r"^/n8/vod/v?(\d+)$"), ep_n8_vod),
     (re.compile(r"^/kraken/streams$"), ep_streams),
     (re.compile(r"^/kraken/streams/featured$"), ep_featured),
     (re.compile(r"^/kraken/streams/summary$"), ep_summary),
@@ -2199,6 +2218,9 @@ class Handler(BaseHTTPRequestHandler):
                                                "application/json; charset=utf-8", head)
             elif path == "/link":
                 status, size = self._redirect(302, "/#werbefrei")
+            elif path.startswith("/n8/ram/") and n8_ram(path):
+                status, size = self._send_text(200, n8_ram(path), "audio/x-pn-realaudio", head,
+                                               extra={"Content-Disposition": 'inline; filename="stream.ram"'})
             elif path == "/redirects.txt":
                 status, size = self._send_text(200, redirects_txt(), "text/plain; charset=utf-8", head, cache=300,
                                                extra={"Content-Disposition": 'attachment; filename="redirects.txt"'})
