@@ -3,7 +3,7 @@
 
 Aufruf:
   python3 vita-twitch-check.py https://127.0.0.1:8443            (lokal, Zertifikat ungeprueft)
-  python3 vita-twitch-check.py https://ytv.serverlele.de --verify (oeffentlich, mit TLS-Pruefung)
+  python3 vita-twitch-check.py https://ttv.serverlele.de --verify (oeffentlich, mit TLS-Pruefung)
   Optional: --ua "<User-Agent der Vita aus dem NPM-Log>"  --channel <login>  --no-hls
 """
 import argparse

@@ -9,7 +9,7 @@ NPM_DATA=/root/npm/data
 NGINX_CUSTOM=$NPM_DATA/nginx/custom/http.conf
 TS=$(date +%Y%m%d-%H%M%S)
 HOST=$(grep -oP '^VITA_PUBLIC_BASE=https?://\K[^/]+' /etc/vita-twitch.env 2>/dev/null || true)
-HOST=${HOST:-ytv.serverlele.de}
+HOST=${HOST:-ttv.serverlele.de}
 BK=/root/vita-twitch-backup-$TS
 
 ok()   { echo "  [ok] $*"; }
@@ -54,9 +54,9 @@ if [ ! -f /etc/ssl/private/vita-twitch-test.key ]; then
 fi
 
 echo "== nginx (NPM)"
-if [ ! -f /root/npm/letsencrypt/live/ytv-rsa/fullchain.pem ]; then
-  warn "RSA-Zertifikat ytv-rsa fehlt. Einmalig (NPM-Host $HOST muss dafuer kurz aktiv sein):"
-  echo "     docker exec $NPM certbot certonly --config /etc/letsencrypt.ini --cert-name ytv-rsa --key-type rsa \\"
+if [ ! -f /root/npm/letsencrypt/live/ttv-rsa/fullchain.pem ]; then
+  warn "RSA-Zertifikat ttv-rsa fehlt. Einmalig (NPM-Host $HOST muss dafuer kurz aktiv sein):"
+  echo "     docker exec $NPM certbot certonly --config /etc/letsencrypt.ini --cert-name ttv-rsa --key-type rsa \\"
   echo "       --rsa-key-size 2048 --webroot -w /data/letsencrypt-acme-challenge -d $HOST --agree-tos --non-interactive"
   echo "     danach NPM-Host $HOST deaktivieren und install.sh erneut ausfuehren."
 else

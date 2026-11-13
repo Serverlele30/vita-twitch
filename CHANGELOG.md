@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.30 – Nokia N8
+- Hostname jetzt `ttv.serverlele.de` (vorher `ytv`), RSA-Zertifikat heisst jetzt `ttv-rsa`
+- N8-Clients (`?client=n8` oder User-Agent `N8Twitch`) bekommen alle Bild-URLs ueber den eigenen Bildproxy per `http://`, verkleinert und ohne Abdunkeln
+- Neuer Endpunkt `/n8/stream/<login>` liefert die RTSP-Adresse (MediaMTX, Standard `rtsp://<host>:8554/tw/<login>`)
+- Neue Variablen `VITA_N8_RTSP_BASE` und `VITA_N8_HTTP_BASE`
+
 ## 2.29 – Sicherheit
 - Browser-Seiten nur über HTTPS: Port 80 leitet um, `POST /link` über HTTP wird abgelehnt
 - Strenge Content-Security-Policy (Skript per Hash), Schutz gegen Einbetten (`frame-ancestors 'none'`, `X-Frame-Options`), Permissions-Policy, COOP

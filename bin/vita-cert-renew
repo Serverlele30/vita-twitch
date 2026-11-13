@@ -1,11 +1,11 @@
 #!/bin/bash
 # vita-cert-renew [--dry-run]
-# Verlaengert das RSA-Zertifikat "ytv-rsa" im NPM-Container. NPM erneuert es nicht selbst,
+# Verlaengert das RSA-Zertifikat "ttv-rsa" im NPM-Container. NPM erneuert es nicht selbst,
 # weil es ausserhalb der NPM-Oberflaeche angelegt wurde (die Vita braucht RSA statt ECDSA).
 # certbot erneuert nur, wenn das Zertifikat in weniger als 30 Tagen ablaeuft; nginx wird nur dann neu geladen.
 set -uo pipefail
 NPM=${VITA_NPM_CONTAINER:-npm-npm-1}
-CERT=${VITA_CERT_NAME:-ytv-rsa}
+CERT=${VITA_CERT_NAME:-ttv-rsa}
 PEM=/root/npm/letsencrypt/live/$CERT/fullchain.pem
 WARN_DAYS=14
 DRY=""; [ "${1:-}" = "--dry-run" ] && DRY="--dry-run"

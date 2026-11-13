@@ -11,7 +11,7 @@
 
 Live-Streams · VODs · Login · gefolgte Kanäle · werbefrei mit Turbo, Abo oder Prime
 
-**Live:** [ytv.serverlele.de](https://ytv.serverlele.de)
+**Live:** [ttv.serverlele.de](https://ttv.serverlele.de)
 
 </div>
 
@@ -94,7 +94,7 @@ bash install.sh                      # noch einmal: installiert, prüft nginx un
 vita-twitch-check https://<host> --verify
 ```
 
-`install.sh` sichert vorher alles nach `/root/vita-twitch-backup-<Zeit>`, testet die nginx-Konfiguration und stellt den alten Stand wieder her, wenn etwas schiefgeht. Eine vorhandene env-Datei bleibt unangetastet. Den Beispiel-Host `ytv.serverlele.de` ersetzt du in `nginx/`, `vita/` und gegebenenfalls `VITA_CERT_NAME` durch deinen eigenen.
+`install.sh` sichert vorher alles nach `/root/vita-twitch-backup-<Zeit>`, testet die nginx-Konfiguration und stellt den alten Stand wieder her, wenn etwas schiefgeht. Eine vorhandene env-Datei bleibt unangetastet. Den Beispiel-Host `ttv.serverlele.de` ersetzt du in `nginx/`, `vita/` und gegebenenfalls `VITA_CERT_NAME` durch deinen eigenen.
 
 <details>
 <summary><b>Einstellungen in <code>/etc/vita-twitch.env</code></b></summary>
@@ -102,7 +102,7 @@ vita-twitch-check https://<host> --verify
 | Variable | Standard | Bedeutung |
 |---|---|---|
 | `TWITCH_CLIENT_ID` / `TWITCH_CLIENT_SECRET` | – | Twitch-Anwendung (**Pflicht**) |
-| `VITA_PUBLIC_BASE` | `https://ytv.serverlele.de` | eigener Host, nach außen sichtbar |
+| `VITA_PUBLIC_BASE` | `https://ttv.serverlele.de` | eigener Host, nach außen sichtbar |
 | `TWITCH_WEB_AUTH_TOKEN` | – | Website-Token des Betreibers, gilt nur für dessen eigenes Konto |
 | `VITA_WEB_TOKEN_SHARE` | `0` | `1` = Betreiber-Token für alle Konten (nicht empfohlen) |
 | `VITA_TURBO` | `0` | dem Betreiber-Konto in der App Turbo anzeigen |
@@ -110,6 +110,8 @@ vita-twitch-check https://<host> --verify
 | `VITA_ONLINE_WINDOW` | `600` | Sekunden, die eine Vita im Live-Zähler als verbunden gilt |
 | `VITA_IP_MATCH_HOURS` | `12` | Zuordnung Stream → Konto über die IP der letzten Aktivität |
 | `VITA_PROFILE_BG` / `VITA_BANNER_DIM` | `#1f1f23` / `0.4` | Darstellung der Profilkarte |
+| `VITA_N8_RTSP_BASE` | `rtsp://<host>:8554` | RTSP-Basis für die Nokia-N8-App (MediaMTX) |
+| `VITA_N8_HTTP_BASE` | `http://<host>` | Basis für Bild-Links an das N8 |
 | `VITA_REPO_URL` | dieses Repo | Link zum Quellcode auf der Startseite |
 
 </details>

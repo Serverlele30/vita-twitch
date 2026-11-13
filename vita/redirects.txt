@@ -2,9 +2,9 @@
 # Exact host matches only; ports, URL paths and certificate validation stay enabled.
 # Restart the application after editing. PSN sign-in has a built-in default mapping.
 
-api.twitch.tv ytv.serverlele.de
-usher.twitch.tv ytv.serverlele.de
-usher.ttvnw.net ytv.serverlele.de
-usher.justin.tv ytv.serverlele.de
-spade.twitch.tv ytv.serverlele.de
-api.mixpanel.com ytv.serverlele.de
+api.twitch.tv ttv.serverlele.de
+usher.twitch.tv ttv.serverlele.de
+usher.ttvnw.net ttv.serverlele.de
+usher.justin.tv ttv.serverlele.de
+spade.twitch.tv ttv.serverlele.de
+api.mixpanel.com ttv.serverlele.de

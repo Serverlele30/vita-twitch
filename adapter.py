@@ -39,7 +39,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.29"
+VERSION = "2.30"
 
 HOST = os.environ.get("VITA_TWITCH_HOST", "127.0.0.1")
 PORT = int(os.environ.get("VITA_TWITCH_PORT", "8443"))
@@ -92,8 +92,11 @@ WEB_SHARE = os.environ.get("VITA_WEB_TOKEN_SHARE", "0") == "1"
 IP_MATCH_HOURS = float(os.environ.get("VITA_IP_MATCH_HOURS", "12"))
 # Profilkarte: Hintergrundfarbe + Ersatz-Banner (Twitch liefert beides nicht mehr)
 PROFILE_BG = os.environ.get("VITA_PROFILE_BG", "#1f1f23")
-PUBLIC_BASE = os.environ.get("VITA_PUBLIC_BASE", "https://ytv.serverlele.de").rstrip("/")
+PUBLIC_BASE = os.environ.get("VITA_PUBLIC_BASE", "https://ttv.serverlele.de").rstrip("/")
 PUBLIC_HOST = urllib.parse.urlsplit(PUBLIC_BASE).netloc
+# Nokia N8 (Symbian Belle / Reborn): spricht die API ueber http://, Video kommt per RTSP von MediaMTX
+N8_RTSP_BASE = os.environ.get("VITA_N8_RTSP_BASE", "rtsp://%s:8554" % PUBLIC_HOST.split(":")[0]).rstrip("/")
+N8_HTTP_BASE = os.environ.get("VITA_N8_HTTP_BASE", "http://" + PUBLIC_HOST).rstrip("/")
 # Infoseite fuer Browser unter "/" (die App bekommt dort weiter JSON)
 WWW_DIR = os.environ.get("VITA_WWW_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "www"))
 REPO_URL = os.environ.get("VITA_REPO_URL", "https://git.serverlele.de/Serverlele30/vita-twitch")
@@ -677,16 +680,17 @@ def ep_channel(base, params, req, login):
     return 200, ch
 
 
-def image_proxy_link(url, w, h):
+def image_proxy_link(url, w, h, base=None, dim=True):
     """Bild ueber den Adapter verkleinert ausliefern (Offline-Bilder sind 1920x1080-PNGs mit
-    mehreren MB - die laedt die Vita nicht). Ohne Pillow: Original-URL."""
+    mehreren MB - die laedt die Vita nicht). Ohne Pillow: Original-URL.
+    base: andere Basis-URL (N8: http://), dim=False: nicht abdunkeln (normale Bilder statt Banner)."""
     try:
         import PIL  # noqa: F401
     except ImportError:
         return url
-    blob = _b64e(("%dx%d|" % (w, h) + url).encode())
+    blob = _b64e(("%dx%d%s|" % (w, h, "" if dim else "n") + url).encode())
     sig = _b64e(hmac.new(HLS_KEY, b"img" + blob.encode(), hashlib.sha256).digest()[:12])
-    return "%s/img/r/%s/%s.jpg" % (PUBLIC_BASE, sig, blob)
+    return "%s/img/r/%s/%s.jpg" % (base or PUBLIC_BASE, sig, blob)
 
 
 def ep_image(base, params, req, sig, blob):
@@ -694,10 +698,11 @@ def ep_image(base, params, req, sig, blob):
     if not hmac.compare_digest(good, sig):
         raise ApiError(403, "Invalid image link")
     size, url = _b64d(blob).decode().split("|", 1)
-    w, h = (int(x) for x in size.split("x"))
+    dim = not size.endswith("n")
+    w, h = (int(x) for x in size.rstrip("n").split("x"))
     if (urllib.parse.urlsplit(url).hostname or "") != "static-cdn.jtvnw.net":
         raise ApiError(403, "Host not allowed")
-    key = ("img", blob, BANNER_DIM)
+    key = ("img", blob, BANNER_DIM if dim else 1.0)
     data = cache.get(key)
     if data is None:
         from io import BytesIO
@@ -712,7 +717,7 @@ def ep_image(base, params, req, sig, blob):
         im = im.resize((max(w, round(im.width * scale)), max(h, round(im.height * scale))), Image.LANCZOS)
         left, top = (im.width - w) // 2, (im.height - h) // 2
         im = im.crop((left, top, left + w, top + h))
-        if BANNER_DIM < 1.0:
+        if dim and BANNER_DIM < 1.0:
             from PIL import ImageEnhance
             im = ImageEnhance.Brightness(im).enhance(BANNER_DIM)
         out = BytesIO()
@@ -1317,6 +1322,44 @@ def run_ytdlp_subprocess(login, web=None):
         err = (p.stderr or "").strip().splitlines()[-1:] or ["unbekannt"]
         raise ApiError(404, "Stream not available: " + err[0][:200])
     return json.loads(p.stdout)
+
+
+# --------------------------------------------------------------------------
+# Nokia N8: Bilder ueber http-Proxy, Stream-Adresse per RTSP (MediaMTX holt die HLS-Playlist hier ab)
+# --------------------------------------------------------------------------
+_IMG_SIZE = re.compile(r"-(\d{2,4})x(\d{2,4})\.(?:jpe?g|png)$")
+
+
+def n8_image(url):
+    m = _IMG_SIZE.search(url)
+    if m:
+        w, h = int(m.group(1)), int(m.group(2))
+    elif "profile_image" in url:
+        w, h = 150, 150
+    else:
+        w, h = 320, 180
+    # N8-Display ist 360x640: grosse Bilder auf hoechstens 320 px Breite bringen
+    if w > 320:
+        w, h = 320, max(1, round(h * 320 / w))
+    return image_proxy_link(url, w, h, base=N8_HTTP_BASE, dim=False)
+
+
+def n8_images(obj):
+    """Alle Twitch-Bild-URLs (https) auf den http-Bildproxy des Adapters umschreiben."""
+    if isinstance(obj, dict):
+        return {k: n8_images(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [n8_images(v) for v in obj]
+    if isinstance(obj, str) and obj.startswith("https://static-cdn.jtvnw.net/") and "{" not in obj:
+        return n8_image(obj)
+    return obj
+
+
+def ep_n8_stream(base, params, req, login):
+    login = login.lower()
+    if not re.fullmatch(r"[a-z0-9_]{1,25}", login):
+        raise ApiError(404, "Channel not found")
+    return 200, {"login": login, "rtsp": "%s/tw/%s" % (N8_RTSP_BASE, login)}
 
 
 def build_master(info, base_http=None):
@@ -1936,6 +1979,7 @@ def warm_loop():
 # --------------------------------------------------------------------------
 ROUTES = [
     (re.compile(r"^/kraken$"), ep_root),
+    (re.compile(r"^/n8/stream/([A-Za-z0-9_]+)$"), ep_n8_stream),
     (re.compile(r"^/kraken/streams$"), ep_streams),
     (re.compile(r"^/kraken/streams/featured$"), ep_featured),
     (re.compile(r"^/kraken/streams/summary$"), ep_summary),
@@ -2071,6 +2115,8 @@ class Handler(BaseHTTPRequestHandler):
                 payload = lite(payload)
             if ID_STRINGS or PREVIEW_STRING or HTTP_IMAGES:
                 payload = variant(payload)
+            if getattr(self, "_n8", False):
+                payload = n8_images(payload)
             body = json.dumps(sanitize(payload), ensure_ascii=False,
                               separators=(",", ":")).encode("utf-8")
             ctype = "application/json; charset=utf-8"
@@ -2110,6 +2156,7 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlsplit(self.path)
         params = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
         path = re.sub(r"/+", "/", parsed.path).rstrip("/") or "/"
+        self._n8 = (params.get("client", [""])[0] == "n8" or "N8Twitch" in self.headers.get("User-Agent", ""))
         base = self._base()
         status, size, matched = 500, 0, True
         try:

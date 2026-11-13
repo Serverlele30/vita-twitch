@@ -1,5 +1,5 @@
 [Unit]
-Description=PS-Vita-Twitch: RSA-Zertifikat ytv-rsa verlaengern
+Description=PS-Vita-Twitch: RSA-Zertifikat ttv-rsa verlaengern
 After=docker.service network-online.target
 Wants=network-online.target
 
